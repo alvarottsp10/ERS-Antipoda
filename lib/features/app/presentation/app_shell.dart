@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'landing_screen.dart';
+import '../../crm/presentation/crm_dashboard_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -35,6 +37,7 @@ class _AppShellState extends State<AppShell> {
                   collapsed: false,
                   onNavigate: (route) {
                     Navigator.pop(context);
+                    _handleNavigate(context, route);
                   },
                 ),
               ),
@@ -52,7 +55,7 @@ class _AppShellState extends State<AppShell> {
                     width: sidebarWidth,
                     child: _Sidebar(
                       collapsed: !_sidebarOpen,
-                      onNavigate: (route) {},
+                      onNavigate: (route) => _handleNavigate(context, route),
                     ),
                   ),
                 Expanded(
@@ -83,6 +86,26 @@ class _AppShellState extends State<AppShell> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+    Widget _screenForRoute(String route) {
+    switch (route) {
+      case '/crm':
+        return const CrmDashboardScreen();
+      case '/dashboard':
+      default:
+        return const LandingScreen(); // o teu “dashboard” atual
+    }
+  }
+
+  void _handleNavigate(BuildContext context, String route) {
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => AppShell(child: _screenForRoute(route)),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
       ),
     );
   }
