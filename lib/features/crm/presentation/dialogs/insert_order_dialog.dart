@@ -134,7 +134,10 @@ class _InsertOrderDialogState extends State<InsertOrderDialog> {
 
     try {
       // 1) Ir buscar a sigla (initials) do comercial selecionado no dropdown
-      final selected = _commercials.where((c) => c['user_id'] == _selectedCommercialUserId).toList();
+      final selected = _commercials.where(
+        (c) => c['user_id'] == _selectedCommercialUserId,
+      ).toList();
+
       final initials = selected.isNotEmpty
           ? (selected.first['initials'] ?? '').toString().trim()
           : '';
@@ -151,9 +154,10 @@ class _InsertOrderDialogState extends State<InsertOrderDialog> {
       final res = await Supabase.instance.client.rpc(
         'create_order',
         params: {
-          'p_customer_id': _selectedCustomer!.id,
-          'p_commercial_sigla': initials,
-          // não passas p_status -> default "Em análise"
+          'p_commercial_phase_id': null,     // bigint (podes manter null)
+          'p_commercial_sigla': initials,    // TEXT -> a sigla que calculaste acima
+          'p_commercial_user_id': _selectedCommercialUserId, // UUID -> o user_id do comercial
+          'p_customer_id': _selectedCustomer!.id,            // UUID -> cliente
         },
       );
 

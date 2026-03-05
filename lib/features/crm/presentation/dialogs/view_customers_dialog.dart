@@ -424,35 +424,35 @@ class _ViewCustomersDialogState extends State<ViewCustomersDialog> {
                   itemCount: _contacts.length,
                   itemBuilder: (_, i) {
                     final c = _contacts[i];
-                    return Card(
-                      child: ListTile(
-                        title: Row(
-                          children: [
-                            Text(c['name'] ?? ''),
-                            if (c['is_primary'] == true)
-                              const Padding(
-                                padding:
-                                    EdgeInsets.only(left: 8),
-                                child: Text("Primário",
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight:
-                                            FontWeight.bold)),
-                              )
-                          ],
-                        ),
-                        subtitle: Text(
-                            "${c['role']} • ${c['email']}"),
-                        trailing: IconButton(
-                          icon:
-                              const Icon(Icons.delete_outline),
-                          onPressed: () =>
-                              _removeContact(
-                                  customerId!,
-                                  c['id']),
-                        ),
+                   return Card(
+                    child: ListTile(
+                      title: Row(
+                        children: [
+                          Text(c['name'] ?? ''),
+                          if (c['is_primary'] == true)
+                            const Padding(
+                              padding:
+                                  EdgeInsets.only(left: 8),
+                              child: Text("Primário",
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight:
+                                          FontWeight.bold)),
+                            )
+                        ],
                       ),
-                    );
+                      subtitle: Text(
+                          "${c['role']} • ${c['email']}"),
+                      trailing: IconButton(
+                        icon:
+                            const Icon(Icons.delete_outline),
+                        onPressed: () =>
+                            _removeContact(
+                                customerId!,
+                                c['id']),
+                      ),
+                    ),
+                  );
                   },
                 ),
         ),

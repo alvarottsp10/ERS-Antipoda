@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'features/auth/presentation/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // MOSTRA AS CAIXAS DOS WIDGETS (debug layout)
+  debugPaintSizeEnabled = false;
 
   await Supabase.initialize(
     url: const String.fromEnvironment('SUPABASE_URL'),

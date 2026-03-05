@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'landing_screen.dart';
 import '../../crm/presentation/crm_dashboard_screen.dart';
+import '../../budgeting/presentation/budget_dashboard_screen_manager.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -94,7 +95,8 @@ class _AppShellState extends State<AppShell> {
     switch (route) {
       case '/crm':
         return const CrmDashboardScreen();
-      case '/dashboard':
+      case '/budgeting':
+        return const BudgetDashboardScreen();
       default:
         return const LandingScreen(); // o teu “dashboard” atual
     }
@@ -142,7 +144,7 @@ class _TopBar extends StatelessWidget {
             const SizedBox(width: 8),
             Image.asset(
               'assets/images/logo_white.png',
-              height: 34,
+              height: 48,
             ),
             const Spacer(),
             IconButton(
