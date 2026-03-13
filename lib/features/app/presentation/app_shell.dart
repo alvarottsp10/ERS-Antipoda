@@ -3,6 +3,7 @@ import 'landing_screen.dart';
 import '../../crm/presentation/crm_dashboard_screen.dart';
 import '../../budgeting/presentation/budget_dashboard_screen_manager.dart';
 import '../../orders_projects/presentation/orders_projects_screen.dart';
+import '../../projeto/presentation/projeto_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({
@@ -46,7 +47,6 @@ class _AppShellState extends State<AppShell> {
             ),
       body: Stack(
         children: [
-          // Conteúdo abaixo da TopBar
           Positioned.fill(
             top: _topBarHeight,
             child: Row(
@@ -71,7 +71,6 @@ class _AppShellState extends State<AppShell> {
             ),
           ),
 
-          // TopBar fixa
           Positioned(
             top: 0,
             left: 0,
@@ -92,7 +91,7 @@ class _AppShellState extends State<AppShell> {
     );
   }
 
-    Widget _screenForRoute(String route) {
+  Widget _screenForRoute(String route) {
     switch (route) {
       case '/crm':
         return const CrmDashboardScreen();
@@ -100,8 +99,10 @@ class _AppShellState extends State<AppShell> {
         return const BudgetDashboardScreen();
       case '/orders':
         return const OrdersProjectsScreen();
+      case '/project':
+        return const ProjetoScreen();
       default:
-        return const LandingScreen(); // o teu “dashboard” atual
+        return const LandingScreen();
     }
   }
 
