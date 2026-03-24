@@ -1,0 +1,151 @@
+//// Prompt Clock + Ação do Clock
+
+Objetivo:
+Fazer uma alteração pontual e segura no cronómetro mockado do topo/shell, cobrindo:
+1. atualização do UI no estado paused
+2. acumulação e persistência correta do tempo ao concluir
+3. mensagens/confirmacões adicionais ao utilizador
+
+Resultado funcional obrigatório:
+- Quando o timer estiver paused, em vez de mostrar um único pill-shaped widget, a UI deve mostrar 3 elementos separados:
+  1. um pill com o tempo atual
+  2. um botão de play para retomar o timer
+  3. um botão para concluir / finalizar o registo
+- Sempre que um cronómetro é iniciado, o sistema deve verificar quanto tempo já existe atualmente na base de dados para esse registo/contexto.
+- Ao terminar o cronómetro, o novo tempo da sessão deve ser adicionado ao tempo já existente.
+- O valor final persistido deve ser:
+  final_total = existing_time + current_session_time
+- Nunca substituir diretamente o valor anterior por apenas o tempo da sessão atual.
+
+Regras de execução:
+- NÃO faças scan ao repositório.
+- Usa contexto mínimo.
+- Lê apenas os ficheiros estritamente necessários.
+- Preserva o comportamento fora deste fluxo.
+- Mantém a arquitetura atual.
+- Não faças refactors grandes.
+- Não alteres módulos não relacionados.
+- Não alteres a lógica global do shell além do mínimo necessário.
+- Reutiliza handlers, services e repositories existentes sempre que possível.
+- Não alterar comportamento de running, paused, idle ou completed além do estritamente necessário para suportar esta alteração.
+- Mantém o novo estado paused visualmente consistente com o design atual do topo/shell.
+
+Contexto permitido:
+- project_context.md
+- actual_state.md
+- supabase_schema_resume.md
+
+Escopo funcional:
+- O cronómetro do topo já existe e vive no shell.
+- É um cronómetro mockado de UX e deve continuar assim.
+- A alteração deve ficar limitada ao componente visual do topo, ao wiring imediato de ações e ao fluxo mínimo necessário para suportar acumulação/persistência final.
+
+Assumptions first:
+Se o ficheiro exato do widget do topo / timer ou o ponto exato de leitura/escrita do tempo não for imediatamente claro, lista primeiro:
+- assumptions
+- ficheiros candidatos
+- ponto provável de leitura
+- ponto provável de escrita
+- unidade de tempo provável usada no armazenamento
+
+Depois implementa.
+Não faças exploração ampla do projeto.
+Não alargues a procura para outras zonas do projeto além da área imediata do shell/top widget e das dependências diretas.
+
+Parte 1 — Alteração visual do relógio:
+No estado “paused”, substituir o widget único atual por uma composição com 3 elementos separados:
+- pill de tempo atual
+- botão play para retomar o timer
+- botão para concluir/finalizar registo
+
+Regras para esta parte:
+- preservar visual e comportamento fora do estado paused
+- manter coerência com o design system atual do topo/shell
+- reutilizar handlers já existentes sempre que possível
+- se não existir handler explícito de concluir/finalizar, fazer apenas o mínimo wiring necessário no mesmo fluxo/componente, sem refatorar a lógica base
+
+Parte 2 — Comportamento funcional do cronómetro:
+1) Ao iniciar o cronómetro:
+- verificar o tempo atual já guardado na base de dados para o registo/contexto
+- carregar esse valor como base para o cálculo acumulado
+- ler esse valor uma única vez no início do fluxo ou no primeiro ponto local confiável
+- se não existir valor persistido anterior, assumir 0
+- manter consistência da unidade de tempo usada internamente e no storage
+
+2) Ao concluir / terminar:
+- mostrar ao utilizador uma confirmação antes de gravar
+- nessa confirmação indicar claramente:
+  - quanto tempo vai ser adicionado
+  - quanto tempo já existia
+  - quanto ficará no total final
+- só depois confirmar a gravação
+
+3) Ao gravar:
+- calcular explicitamente:
+  final_total = existing_time + current_session_time
+- persistir o total acumulado
+- não persistir apenas o tempo parcial da sessão atual
+- manter o fluxo atual o mais intacto possível
+
+Mensagens adicionais / UX:
+- antes de gravar, apresentar uma mensagem de confirmação clara e curta
+- essa mensagem deve mostrar:
+  - tempo existente
+  - tempo da sessão atual
+  - total final após acumulação
+- se o utilizador cancelar, não persistir nada
+- manter o texto e a interação consistentes com o padrão visual e UX já existente no shell/top bar
+- não introduzir fluxos complexos nem modais desnecessários se já existir um padrão simples reutilizável
+
+Regras de consistência:
+- garantir que leitura, cálculo, display e persistência usam unidades compatíveis
+- se a unidade guardada na base de dados não for clara, não inventar: listar assumptions first e inferir a partir do código e schema permitido
+- não inventar campos, tabelas ou relações
+- se houver conflito, alinhar com o schema/resumo disponível
+
+Restrições de ficheiros:
+Podes ler/modificar apenas:
+- o ficheiro do widget/componente do cronómetro no topo/shell
+- o controller/provider/viewmodel diretamente associado
+- o repository/service usado para ler/gravar o tempo
+- dependências diretas de confirmação/modal/dialog, apenas se necessário
+- dependências visuais diretas, apenas se necessário
+
+Não tocar noutros módulos.
+
+Critérios de segurança:
+- preservar o comportamento visual fora do estado paused
+- preservar integração atual com o mock timer
+- evitar efeitos colaterais em CRM, budgeting e outras áreas
+- se não existir persistência preparada para acumulação, fazer apenas a alteração mínima compatível com a arquitetura existente
+- evitar alterar assinaturas de APIs públicas fora do necessário
+- evitar mover ficheiros
+- evitar criar abstrações novas sem necessidade
+- limitar a mudança ao menor diff possível
+
+Estratégia de implementação esperada:
+- identificar o widget do topo responsável pelo cronómetro
+- identificar o controller/provider/viewmodel diretamente usado por esse widget
+- identificar onde hoje o cronómetro inicia e obtém o contexto/registo atual
+- identificar onde hoje é feita a leitura do tempo existente, se existir
+- identificar onde hoje é feita a escrita final do tempo
+- implementar primeiro a alteração visual do estado paused
+- depois introduzir leitura do tempo já persistido no início do fluxo ou no primeiro ponto local viável
+- guardar esse valor base no controller/viewmodel/estado local já existente
+- ao concluir, calcular:
+  - existing_time
+  - current_session_time
+  - final_total
+- mostrar confirmação com esses 3 valores
+- só após confirmação persistir final_total
+- reutilizar handlers existentes sempre que possível
+
+Resultado esperado:
+- implementação localizada
+- diff pequeno a moderado
+- lista curta das assumptions usadas
+- resumo final dos ficheiros alterados
+- explicação breve de como o total acumulado é calculado
+- resumo breve de como ficou o novo estado paused do widget
+
+////////

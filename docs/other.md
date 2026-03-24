@@ -1,0 +1,3 @@
+## Código para schema da base de dados
+
+docker run --rm -v "%cd%:/work" -e PGPASSWORD=!Antipoda.2026! postgres:17 sh -c "pg_dump --schema-only --no-owner --no-privileges --exclude-schema=auth --exclude-schema=storage --exclude-schema=realtime --exclude-schema=extensions --exclude-schema=graphql --exclude-schema=graphql_public --exclude-schema=pgbouncer --exclude-schema=vault 'postgresql://postgres.cvcjfyvhgxpmdlrfzprf@aws-1-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require' > /work/supabase_schema.sql"

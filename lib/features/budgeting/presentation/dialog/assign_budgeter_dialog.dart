@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../application/process_folder_helper.dart';
+import '../../data/budgeting_repository.dart';
+import '../../domain/budgeting_models.dart';
 
 class AssignBudgeterDialog extends StatefulWidget {
   const AssignBudgeterDialog({
@@ -7,31 +10,40 @@ class AssignBudgeterDialog extends StatefulWidget {
     required this.orderId,
     required this.orderRef,
     required this.customerName,
+    required this.entryDateLabel,
+    required this.expectedDeliveryDateLabel,
   });
 
-  final String orderId; // uuid
+  final String orderId;
   final String orderRef;
   final String customerName;
+  final String entryDateLabel;
+  final String expectedDeliveryDateLabel;
 
   @override
   State<AssignBudgeterDialog> createState() => _AssignBudgeterDialogState();
 }
 
 class _AssignBudgeterDialogState extends State<AssignBudgeterDialog> {
-  final _sb = Supabase.instance.client;
+  static const int _emptyOptionId = -1;
+  final _repository = BudgetingRepository();
 
   late Future<void> _boot;
 
-  List<Map<String, dynamic>> _budgeters = [];
-  List<Map<String, dynamic>> _typologies = [];
-  List<Map<String, dynamic>> _productTypes = [];
+  List<BudgetingBudgeterOption> _budgeters = [];
+  List<BudgetingOption> _typologies = [];
+  List<BudgetingOption> _productTypes = [];
 
-  String? _selectedBudgeterUserId; // profiles.user_id
-  int? _selectedTypologyId; // budget_typologies.id
-  int? _selectedProductTypeId; // product_types.id (opcional)
+  String? _selectedLeadUserId;
+  String? _selectedSupportUserId;
+  int? _selectedTypologyId;
+  int? _selectedProductTypeId;
   bool _isSpecial = false;
 
   bool _saving = false;
+
+  static const _testProcessFolderPath =
+      r'Y:\9999 - TECNOLOGIA E SERVIÇOS DE INFORMAÇÃO\040 - DEV\01 - ERP APP\2000 - PROCESSOS\2026\2026 AP 002 - Antípoda Lda\000 - DEP.COMERCIAL\00 - Especificações';
 
   @override
   void initState() {
@@ -48,102 +60,81 @@ class _AssignBudgeterDialogState extends State<AssignBudgeterDialog> {
   }
 
   Future<void> _loadBudgeters() async {
-    final res = await _sb
-        .from('profiles')
-        .select('''
-          user_id,
-          full_name,
-          is_active,
-          profile_roles!inner(
-            roles!inner(code)
-          )
-        ''')
-        .eq('is_active', true)
-        .inFilter('profile_roles.roles.code', ['ORCAMENTISTA', 'ORC_MANAGER', 'ADMIN'])
-        .order('full_name', ascending: true);
-
-    _budgeters = (res as List).cast<Map<String, dynamic>>();
+    _budgeters = await _repository.fetchBudgeters();
   }
 
   Future<void> _loadTypologies() async {
-    final res = await _sb
-        .from('budget_typologies')
-        .select('id, name, sort_order, is_active')
-        .eq('is_active', true)
-        .order('sort_order', ascending: true);
-
-    _typologies = (res as List).cast<Map<String, dynamic>>();
+    _typologies = await _repository.fetchBudgetTypologies();
   }
 
   Future<void> _loadProductTypes() async {
-    final res = await _sb
-        .from('product_types')
-        .select('id, name, sort_order, is_active')
-        .eq('is_active', true)
-        .order('sort_order', ascending: true);
-
-    _productTypes = (res as List).cast<Map<String, dynamic>>();
+    _productTypes = await _repository.fetchProductTypes();
   }
 
   Future<void> _assign() async {
-    if (_selectedBudgeterUserId == null || _selectedBudgeterUserId!.isEmpty) {
+    final leadUserId = _selectedLeadUserId?.trim();
+    final supportUserId = _selectedSupportUserId?.trim();
+
+    if (leadUserId == null || leadUserId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleciona um orçamentista.')),
-      );
-      return;
-    }
-    if (_selectedTypologyId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleciona uma tipologia.')),
+        const SnackBar(content: Text('Seleciona um orcamentista lead.')),
       );
       return;
     }
 
-    final me = _sb.auth.currentUser?.id;
-    if (me == null) {
+    if (supportUserId != null &&
+        supportUserId.isNotEmpty &&
+        supportUserId == leadUserId) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sessão inválida. Faz login novamente.')),
+        const SnackBar(
+          content: Text('Lead e support nao podem ser o mesmo utilizador.'),
+        ),
+      );
+      return;
+    }
+
+    if (_repository.currentUserId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sessao invalida. Faz login novamente.')),
       );
       return;
     }
 
     setState(() => _saving = true);
+
     try {
-      // 1) Desativar assignments anteriores (se existirem)
-      await _sb
-          .from('order_budget_assignments')
-          .update({'is_active': false})
-          .eq('order_id', widget.orderId);
-
-      // 2) Inserir novo assignment ativo
-      final payload = <String, dynamic>{
-        'order_id': widget.orderId,
-        'assignee_user_id': _selectedBudgeterUserId,
-        'assigned_by': me,
-        'is_active': true,
-        'is_special': _isSpecial,
-        'budget_typology_id': _selectedTypologyId,
-        // product_type_id é opcional
-        if (_selectedProductTypeId != null) 'product_type_id': _selectedProductTypeId,
-      };
-
-      await _sb.rpc(
-        'assign_budgeter',
-        params: {
-          'p_order_id': widget.orderId,
-          'p_assignee_user_id': _selectedBudgeterUserId,
-          'p_budget_typology_id': _selectedTypologyId,
-          'p_product_type_id': _selectedProductTypeId,
-          'p_is_special': _isSpecial,
-        },
+      await _repository.assignBudgeter(
+        orderId: widget.orderId,
+        assigneeUserId: leadUserId,
+        assignmentRole: 'lead',
+        budgetTypologyId: _selectedTypologyId,
+        productTypeId: _selectedProductTypeId,
+        isSpecial: _isSpecial,
       );
 
-      if (!mounted) return;
+      if (supportUserId != null && supportUserId.isNotEmpty) {
+        await _repository.assignBudgeter(
+          orderId: widget.orderId,
+          assigneeUserId: supportUserId,
+          assignmentRole: 'support',
+          budgetTypologyId: _selectedTypologyId,
+          productTypeId: _selectedProductTypeId,
+          isSpecial: _isSpecial,
+        );
+      }
+
+      if (!mounted) {
+        return;
+      }
+
       Navigator.pop(context, true);
-    } catch (e) {
-      if (!mounted) return;
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao atribuir: $e')),
+        SnackBar(content: Text('Erro ao atribuir: $error')),
       );
       setState(() => _saving = false);
     }
@@ -153,13 +144,13 @@ class _AssignBudgeterDialogState extends State<AssignBudgeterDialog> {
   Widget build(BuildContext context) {
     return FutureBuilder<void>(
       future: _boot,
-      builder: (context, snap) {
-        final loading = snap.connectionState == ConnectionState.waiting;
+      builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
 
         return AlertDialog(
           backgroundColor: const Color(0xFFE7E7E7),
           surfaceTintColor: Colors.transparent,
-          title: const Text('Atribuir orçamentista'),
+          title: const Text('Atribuir orcamentista'),
           content: SizedBox(
             width: 560,
             child: Column(
@@ -167,104 +158,208 @@ class _AssignBudgeterDialogState extends State<AssignBudgeterDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.orderRef.isEmpty ? '(sem referência)' : widget.orderRef,
+                  widget.orderRef.isEmpty ? '(sem referencia)' : widget.orderRef,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  widget.customerName.isEmpty ? '(sem cliente)' : widget.customerName,
+                  widget.customerName.isEmpty
+                      ? '(sem cliente)'
+                      : widget.customerName,
                   style: const TextStyle(color: Colors.black54),
                 ),
                 const SizedBox(height: 16),
-
-                if (loading)
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        readOnly: true,
+                        initialValue: widget.entryDateLabel,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          labelText: 'Data esperada de entrada',
+                          prefixIcon: Icon(Icons.event_available_outlined),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        readOnly: true,
+                        initialValue: widget.expectedDeliveryDateLabel,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          border: OutlineInputBorder(),
+                          labelText: 'Data prevista de entrega',
+                          prefixIcon: Icon(Icons.event_outlined),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                if (ProcessFolderHelper.isSupported)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        debugPrint(
+                          'AssignBudgeterDialog opening process folder: '
+                          '$_testProcessFolderPath',
+                        );
+                        final opened = await ProcessFolderHelper.openFolder(
+                          _testProcessFolderPath,
+                        );
+                        if (!mounted) {
+                          return;
+                        }
+                        if (!opened) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Nao foi possivel abrir a pasta do processo: '
+                                '$_testProcessFolderPath',
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.folder_open_outlined),
+                      label: const Text('Abrir pasta com informacao do cliente'),
+                    ),
+                  ),
+                if (ProcessFolderHelper.isSupported) const SizedBox(height: 12),
+                if (isLoading)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 10),
                     child: Center(child: CircularProgressIndicator()),
                   )
                 else ...[
-                  DropdownButtonFormField<String>(
+                  DropdownButtonFormField<String?>(
                     isExpanded: true,
-                    value: _selectedBudgeterUserId,
+                    value: _selectedLeadUserId,
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
-                      labelText: 'Orçamentista',
+                      labelText: 'Lead',
                     ),
                     items: [
-                      const DropdownMenuItem<String>(
+                      const DropdownMenuItem<String?>(
                         value: null,
                         child: Text('Selecionar...'),
                       ),
-                      ..._budgeters.map((p) {
-                        final id = (p['user_id'] ?? '').toString();
-                        final name = (p['full_name'] ?? '').toString();
-                        return DropdownMenuItem<String>(
-                          value: id,
-                          child: Text(name, overflow: TextOverflow.ellipsis),
-                        );
-                      }),
+                      ..._budgeters.map(
+                        (item) => DropdownMenuItem<String?>(
+                          value: item.userId,
+                          child: Text(
+                            item.fullName,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ],
-                    onChanged: _saving ? null : (v) => setState(() => _selectedBudgeterUserId = v),
+                    onChanged: _saving
+                        ? null
+                        : (value) => setState(() => _selectedLeadUserId = value),
                   ),
                   const SizedBox(height: 12),
-
-                  DropdownButtonFormField<int?>(
+                  DropdownButtonFormField<String?>(
                     isExpanded: true,
-                    value: _selectedTypologyId,
+                    value: _selectedSupportUserId,
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
-                      labelText: 'Tipologia',
+                      labelText: 'Support (opcional)',
                     ),
                     items: [
-                      const DropdownMenuItem<int?>(
+                      const DropdownMenuItem<String?>(
                         value: null,
-                        child: Text('Selecionar...'),
+                        child: Text('Nenhum'),
                       ),
-                      ..._typologies.map((t) {
-                        final id = (t['id'] as num?)?.toInt();
-                        final name = (t['name'] ?? '').toString();
-                        return DropdownMenuItem<int?>(
-                          value: id,
-                          child: Text(name, overflow: TextOverflow.ellipsis),
-                        );
-                      }),
+                      ..._budgeters.map(
+                        (item) => DropdownMenuItem<String?>(
+                          value: item.userId,
+                          child: Text(
+                            item.fullName,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ],
-                    onChanged: _saving ? null : (v) => setState(() => _selectedTypologyId = v),
+                    onChanged: _saving
+                        ? null
+                        : (value) =>
+                            setState(() => _selectedSupportUserId = value),
                   ),
                   const SizedBox(height: 12),
-
-                  DropdownButtonFormField<int?>(
+                  DropdownButtonFormField<int>(
                     isExpanded: true,
-                    value: _selectedProductTypeId,
+                    value: _selectedTypologyId ?? _emptyOptionId,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      labelText: 'Tipologia (opcional)',
+                    ),
+                    items: [
+                      const DropdownMenuItem<int>(
+                        value: _emptyOptionId,
+                        child: Text('Selecionar...'),
+                      ),
+                      ..._typologies.map(
+                        (item) => DropdownMenuItem<int>(
+                          value: item.id,
+                          child: Text(
+                            item.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: _saving
+                        ? null
+                        : (value) => setState(
+                              () => _selectedTypologyId =
+                                  value == _emptyOptionId ? null : value,
+                            ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    isExpanded: true,
+                    value: _selectedProductTypeId ?? _emptyOptionId,
                     decoration: const InputDecoration(
                       isDense: true,
                       border: OutlineInputBorder(),
                       labelText: 'Produtos (opcional)',
                     ),
                     items: [
-                      const DropdownMenuItem<int?>(
-                        value: null,
-                        child: Text('—'),
+                      const DropdownMenuItem<int>(
+                        value: _emptyOptionId,
+                        child: Text('-'),
                       ),
-                      ..._productTypes.map((t) {
-                        final id = (t['id'] as num?)?.toInt();
-                        final name = (t['name'] ?? '').toString();
-                        return DropdownMenuItem<int?>(
-                          value: id,
-                          child: Text(name, overflow: TextOverflow.ellipsis),
-                        );
-                      }),
+                      ..._productTypes.map(
+                        (item) => DropdownMenuItem<int>(
+                          value: item.id,
+                          child: Text(
+                            item.name,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
                     ],
-                    onChanged: _saving ? null : (v) => setState(() => _selectedProductTypeId = v),
+                    onChanged: _saving
+                        ? null
+                        : (value) =>
+                            setState(() => _selectedProductTypeId =
+                                value == _emptyOptionId ? null : value),
                   ),
                   const SizedBox(height: 8),
-
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     value: _isSpecial,
-                    onChanged: _saving ? null : (v) => setState(() => _isSpecial = v),
+                    onChanged: _saving
+                        ? null
+                        : (value) => setState(() => _isSpecial = value),
                     title: const Text('Especial'),
                   ),
                 ],
@@ -277,7 +372,7 @@ class _AssignBudgeterDialogState extends State<AssignBudgeterDialog> {
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
-              onPressed: (loading || _saving) ? null : _assign,
+              onPressed: (isLoading || _saving) ? null : _assign,
               child: _saving
                   ? const SizedBox(
                       width: 18,

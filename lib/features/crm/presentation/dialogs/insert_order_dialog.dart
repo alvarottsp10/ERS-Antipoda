@@ -1,500 +1,554 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-class CustomerItem {
-  final String id;
-  final String name;
-  final String? vatNumber;
+import '../../application/crm_dashboard_providers.dart';
+import '../../application/crm_insert_order_models.dart';
+import '../../application/crm_insert_order_service.dart';
 
-  const CustomerItem({
-    required this.id,
-    required this.name,
-    this.vatNumber,
+class InsertOrderDialog extends ConsumerStatefulWidget {
+  const InsertOrderDialog({
+    super.key,
+    this.useCurrentCommercialOnly = false,
   });
 
-  factory CustomerItem.fromMap(Map<String, dynamic> m) {
-    return CustomerItem(
-      id: m['id'] as String,
-      name: (m['name'] ?? '') as String,
-      vatNumber: m['vat_number'] as String?,
-    );
-  }
-
-  String get display => vatNumber == null || vatNumber!.trim().isEmpty
-      ? name
-      : '$name — ${vatNumber!.trim()}';
-}
-
-class ContactItem {
-  final String id;
-  final String name;
-  final String? email;
-  final String? phone;
-  final bool isPrimary;
-
-  const ContactItem({
-    required this.id,
-    required this.name,
-    this.email,
-    this.phone,
-    required this.isPrimary,
-  });
-
-  factory ContactItem.fromMap(Map<String, dynamic> m) {
-    return ContactItem(
-      id: m['id'] as String,
-      name: (m['name'] ?? '') as String,
-      email: m['email'] as String?,
-      phone: m['phone'] as String?,
-      isPrimary: m['is_primary'] == true,
-    );
-  }
-
-  String get display {
-    final parts = <String>[
-      name,
-      if (email != null && email!.trim().isNotEmpty) email!.trim(),
-      if (phone != null && phone!.trim().isNotEmpty) phone!.trim(),
-    ];
-    return parts.join(' — ');
-  }
-}
-
-class InsertOrderDialog extends StatefulWidget {
-  const InsertOrderDialog({super.key});
+  final bool useCurrentCommercialOnly;
 
   @override
-  State<InsertOrderDialog> createState() => _InsertOrderDialogState();
+  ConsumerState<InsertOrderDialog> createState() => _InsertOrderDialogState();
 }
 
-class _InsertOrderDialogState extends State<InsertOrderDialog> {
+class _InsertOrderDialogState extends ConsumerState<InsertOrderDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _service = const CrmInsertOrderService();
+  static const _dialogBackground = Color(0xFFE7E7E7);
+  static const _dialogBorder = Color(0xFFC9C9C9);
+  static const _dangerRed = Color(0xFFB1121D);
 
-  // UI controllers
-  final _customerCtrl = TextEditingController();
+  final _customerController = TextEditingController();
+  final _requestedAtController = TextEditingController();
+  final _expectedDeliveryDateController = TextEditingController();
 
-    // data
-  List<CustomerItem> _customers = [];
-  CustomerItem? _selectedCustomer;
+  List<CrmInsertOrderCustomer> _customers = [];
+  List<CrmInsertOrderContact> _contacts = [];
+  List<CrmInsertOrderCommercial> _commercials = [];
 
-  List<ContactItem> _contacts = [];
-  ContactItem? _selectedContact;
-  bool _loadingContacts = false;
-
-  List<Map<String, dynamic>> _commercials = [];
+  CrmInsertOrderCustomer? _selectedCustomer;
+  CrmInsertOrderContact? _selectedContact;
   String? _selectedCommercialUserId;
-  bool _loadingCommercials = true;
-
-  bool _loadingCustomers = true;
-  bool _creating = false;
+  DateTime? _requestedAt;
+  DateTime? _expectedDeliveryDate;
+  bool _loading = true;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _loadCustomers();
-    _loadCommercials(); // <-- novo
-  }
-
-  Future<void> _loadCustomers() async {
-    try {
-      final res = await Supabase.instance.client
-          .from('customers')
-          .select('id,name,vat_number')
-          .order('name', ascending: true);
-
-      final list = (res as List)
-          .map((e) => CustomerItem.fromMap(e as Map<String, dynamic>))
-          .toList();
-
-      setState(() {
-        _customers = list;
-        _loadingCustomers = false;
-      });
-    } catch (e) {
-      setState(() => _loadingCustomers = false);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro a carregar clientes: $e')),
-      );
-    }
-  }
-
-    Future<void> _loadContactsForCustomer(String customerId) async {
-    setState(() {
-      _loadingContacts = true;
-      _contacts = [];
-      _selectedContact = null;
-    });
-
-    try {
-      final res = await Supabase.instance.client
-          .from('contacts')
-          .select('id,name,email,phone,is_primary')
-          .eq('customer_id', customerId)
-          .order('is_primary', ascending: false)
-          .order('name', ascending: true);
-
-      final list = (res as List)
-          .map((e) => ContactItem.fromMap(e as Map<String, dynamic>))
-          .toList();
-
-      if (!mounted) return;
-      setState(() {
-        _contacts = list;
-        _selectedContact = list.isNotEmpty ? list.first : null;
-        _loadingContacts = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingContacts = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro a carregar contactos: $e')),
-      );
-    }
-  }
-
-  Future<void> _loadCommercials() async {
-    final sb = Supabase.instance.client;
-    final user = sb.auth.currentUser;
-
-    try {
-      final res = await sb
-          .from('commercials_list_view')
-          .select()
-          .eq('is_active', true);
-
-      final list = (res as List)
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-
-      // default: o user logado (se estiver na lista), senão o primeiro
-      String? selected;
-      if (user != null) {
-        final me = list.where((c) => c['user_id'] == user.id).toList();
-        if (me.isNotEmpty) selected = me.first['user_id'] as String?;
-      }
-      selected ??= list.isNotEmpty ? list.first['user_id'] as String? : null;
-
-      if (!mounted) return;
-      setState(() {
-        _commercials = list;
-        _selectedCommercialUserId = selected;
-        _loadingCommercials = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingCommercials = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro a carregar comerciais: $e')),
-      );
-    }
-  }
-
-  String? _required(String? v) =>
-      (v == null || v.trim().isEmpty) ? 'Obrigatório' : null;
-
-  Future<void> _submit() async {
-    if (_selectedCustomer == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleciona um cliente.')),
-      );
-      return;
-    }
-
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _creating = true);
-
-    try {
-      // 1) Ir buscar a sigla (initials) do comercial selecionado no dropdown
-      final selected = _commercials.where(
-        (c) => c['user_id'] == _selectedCommercialUserId,
-      ).toList();
-
-      final initials = selected.isNotEmpty
-          ? (selected.first['initials'] ?? '').toString().trim()
-          : '';
-
-      if (initials.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Seleciona um comercial válido.')),
-        );
-        setState(() => _creating = false);
-        return;
-      }
-
-      // 2) Chamar a SP com customer + sigla
-      final res = await Supabase.instance.client.rpc(
-        'create_order',
-        params: {
-          'p_commercial_phase_id': null,     // bigint (podes manter null)
-          'p_commercial_sigla': initials,    // TEXT -> a sigla que calculaste acima
-          'p_commercial_user_id': _selectedCommercialUserId, // UUID -> o user_id do comercial
-          'p_customer_id': _selectedCustomer!.id,            // UUID -> cliente
-        },
-      );
-
-      // returns table -> lista com 1 row
-      final row = (res as List).first as Map<String, dynamic>;
-
-      if (!mounted) return;
-      Navigator.of(context).pop(row); // devolve ao ecrã principal
-
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
-    } finally {
-      if (mounted) setState(() => _creating = false);
-    }
+    final now = DateTime.now();
+    _requestedAt = DateTime(now.year, now.month, now.day);
+    _requestedAtController.text = _formatDate(_requestedAt);
+    _expectedDeliveryDate = DateTime(now.year, now.month, now.day);
+    _expectedDeliveryDateController.text = _formatDate(_expectedDeliveryDate);
+    _loadData();
   }
 
   @override
   void dispose() {
-    _customerCtrl.dispose();
+    _customerController.dispose();
+    _requestedAtController.dispose();
+    _expectedDeliveryDateController.dispose();
     super.dispose();
   }
 
+  Future<void> _loadData() async {
+    setState(() => _loading = true);
+
+    try {
+      final repository = ref.read(crmRepositoryProvider);
+      final currentUserId = repository.currentUserId;
+      final customersRaw = await repository.fetchInsertOrderCustomers(
+        commercialUserId:
+            widget.useCurrentCommercialOnly ? currentUserId : null,
+      );
+      final commercialsRaw = await repository.fetchActiveCommercialsList();
+
+      if (!mounted) {
+        return;
+      }
+
+      final customers = customersRaw
+          .map(
+            (item) => CrmInsertOrderCustomer(
+              id: (item['id'] ?? '').toString(),
+              name: (item['name'] ?? '').toString(),
+              vatNumber: item['vat_number']?.toString(),
+            ),
+          )
+          .toList(growable: false);
+
+      final commercials = commercialsRaw
+          .map(
+            (item) => CrmInsertOrderCommercial(
+              userId: (item['user_id'] ?? '').toString(),
+              fullName: (item['full_name'] ?? '').toString(),
+              initials: (item['initials'] ?? '').toString(),
+            ),
+          )
+          .where((item) => item.userId.isNotEmpty)
+          .toList(growable: false);
+
+      setState(() {
+        _customers = customers;
+        _commercials = commercials;
+        _selectedCommercialUserId = widget.useCurrentCommercialOnly
+            ? currentUserId
+            : commercials.any((item) => item.userId == currentUserId)
+                ? currentUserId
+                : (commercials.isNotEmpty ? commercials.first.userId : null);
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao carregar dados: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _loadContactsForCustomer(String customerId) async {
+    try {
+      final repository = ref.read(crmRepositoryProvider);
+      final contactsRaw = await repository.fetchContactsForCustomer(customerId);
+
+      if (!mounted) {
+        return;
+      }
+
+      final contacts = contactsRaw
+          .map(
+            (item) => CrmInsertOrderContact(
+              id: (item['id'] ?? '').toString(),
+              name: (item['name'] ?? '').toString(),
+              email: item['email']?.toString(),
+              phone: item['phone']?.toString(),
+              isPrimary: item['is_primary'] == true,
+            ),
+          )
+          .toList(growable: false);
+
+      setState(() {
+        _contacts = contacts;
+        _selectedContact = contacts.cast<CrmInsertOrderContact?>().firstWhere(
+              (contact) => contact?.isPrimary == true,
+              orElse: () => null,
+            );
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao carregar contactos: $e')),
+      );
+    }
+  }
+
+  Future<void> _pickRequestedAt() async {
+    final now = DateTime.now();
+    final initialDate = _requestedAt ?? DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 5),
+      helpText: 'Selecionar data do pedido',
+      builder: (context, child) {
+        final theme = Theme.of(context);
+        return Theme(
+          data: theme.copyWith(
+            colorScheme: theme.colorScheme.copyWith(
+              primary: _dangerRed,
+              onPrimary: Colors.white,
+              surface: _dialogBackground,
+              onSurface: Colors.black87,
+            ),
+            dialogTheme: const DialogThemeData(
+              backgroundColor: _dialogBackground,
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+    );
+
+    if (picked == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _requestedAt = DateTime(picked.year, picked.month, picked.day);
+      _requestedAtController.text = _formatDate(_requestedAt);
+    });
+  }
+
+  Future<void> _pickExpectedDeliveryDate() async {
+    final now = DateTime.now();
+    final initialDate =
+        _expectedDeliveryDate ?? DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 5),
+      helpText: 'Selecionar data prevista de entrega',
+      builder: (context, child) {
+        final theme = Theme.of(context);
+        return Theme(
+          data: theme.copyWith(
+            colorScheme: theme.colorScheme.copyWith(
+              primary: _dangerRed,
+              onPrimary: Colors.white,
+              surface: _dialogBackground,
+              onSurface: Colors.black87,
+            ),
+            dialogTheme: const DialogThemeData(
+              backgroundColor: _dialogBackground,
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+    );
+
+    if (picked == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _expectedDeliveryDate = DateTime(picked.year, picked.month, picked.day);
+      _expectedDeliveryDateController.text =
+          _formatDate(_expectedDeliveryDate);
+    });
+  }
+
+  String _formatDate(DateTime? value) {
+    if (value == null) {
+      return '';
+    }
+
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final year = value.year.toString();
+    return '$day/$month/$year';
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final validation = _service.validateSelection(
+      customer: _selectedCustomer,
+      contact: _selectedContact,
+      commercialUserId: _selectedCommercialUserId,
+      requestedAt: _requestedAt,
+      expectedDeliveryDate: _expectedDeliveryDate,
+    );
+
+    if (validation != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(validation)));
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final input = _service.buildCreateOrderInput(
+        customer: _selectedCustomer!,
+        contact: _selectedContact!,
+        commercialUserId: _selectedCommercialUserId!,
+        commercials: _commercials,
+        requestedAt: _requestedAt!,
+        expectedDeliveryDate: _expectedDeliveryDate,
+      );
+
+      final repository = ref.read(crmRepositoryProvider);
+      final result = await repository.createOrder(
+        customerId: input.customerId,
+        commercialUserId: input.commercialUserId,
+        commercialSigla: input.commercialSigla,
+        contactId: input.contactId,
+        requestedAt: input.requestedAt,
+        expectedDeliveryDate: input.expectedDeliveryDate,
+        commercialPhaseId: input.commercialPhaseId,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pop(result);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pedido criado com sucesso: ${(result['order_ref'] ?? '').toString()}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao criar pedido: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Igual ao teu AddCustomerDialog
-    const bg = Color(0xFFE7E7E7);
-    const border = Color(0xFFC9C9C9);
-    const textDark = Color(0xFF151515);
-
-    return Dialog(
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
-        child: Container(
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: border, width: 1),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Header
-                    Row(
-                      children: [
-                        const Icon(Icons.add_shopping_cart_outlined, color: textDark),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Text(
-                            'Inserir Pedido',
-                            style: TextStyle(
-                              color: textDark,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Fechar',
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    const _SectionTitle('Pedido'),
-                    const SizedBox(height: 10),
-
-                    // Cliente (Autocomplete para UX melhor)
-                    _loadingCustomers
-                        ? const _LoadingField(label: 'Cliente', icon: Icons.business_outlined)
-                        : Autocomplete<CustomerItem>(
-                            displayStringForOption: (c) => c.display,
-                            optionsBuilder: (text) {
-                              final q = text.text.trim().toLowerCase();
-                              if (q.isEmpty) return _customers;
-                              return _customers.where((c) {
-                                final name = c.name.toLowerCase();
-                                final vat = (c.vatNumber ?? '').toLowerCase();
-                                return name.contains(q) || vat.contains(q);
-                              });
-                            },
-                            onSelected: (c) {
-                              setState(() => _selectedCustomer = c);
-                              _customerCtrl.text = c.display;
-                              _loadContactsForCustomer(c.id);
-                            },
-                            fieldViewBuilder: (context, textCtrl, focusNode, onFieldSubmitted) {
-                              // sincroniza com o nosso controller para validação
-                              textCtrl.text = _customerCtrl.text;
-                              textCtrl.selection = TextSelection.fromPosition(
-                                TextPosition(offset: textCtrl.text.length),
-                              );
-
-                              return TextFormField(
-                                controller: textCtrl,
-                                focusNode: focusNode,
-                                decoration: const InputDecoration(
-                                  labelText: 'Cliente',
-                                  prefixIcon: Icon(Icons.business_outlined),
-                                ),
-                                validator: (_) => _selectedCustomer == null ? 'Obrigatório' : null,
-                                onChanged: (v) {
-                                  _customerCtrl.text = v;
-                                  setState(() {
-                                    _selectedCustomer = null;
-                                    _contacts = [];
-                                    _selectedContact = null;
-                                  });
-                                },
-                              );
-                            },
-                          ),
-                                      
-                    const SizedBox(height: 12),
-
-                    _loadingCommercials
-                      ? const _LoadingField(label: 'Sigla Comercial', icon: Icons.badge_outlined)
-                      : DropdownButtonFormField<String>(
-                          value: _selectedCommercialUserId,
-                          decoration: const InputDecoration(
-                            labelText: 'Sigla Comercial',
-                            prefixIcon: Icon(Icons.badge_outlined),
-                          ),
-                          items: _commercials.map((c) {
-                            final userId = c['user_id'] as String;
-                            final initials = (c['initials'] ?? '').toString();
-                            final name = (c['full_name'] ?? '').toString();
-                            return DropdownMenuItem(
-                              value: userId,
-                              child: Text('$initials — $name'),
-                            );
-                          }).toList(),
-                          onChanged: (v) => setState(() => _selectedCommercialUserId = v),
-                          validator: (v) => (v == null || v.trim().isEmpty) ? 'Obrigatório' : null,
-                        ),
-
-                    const SizedBox(height: 12),
-
-                    if (_selectedCustomer == null)
-                      const InputDecorator(
-                        decoration: InputDecoration(
-                          labelText: 'Contacto do Pedido',
-                          prefixIcon: Icon(Icons.contact_phone_outlined),
-                        ),
-                        child: Text('Seleciona primeiro um cliente.'),
-                      )
-                    else if (_loadingContacts)
-                      const _LoadingField(
-                        label: 'Contacto do Pedido',
-                        icon: Icons.contact_phone_outlined,
-                      )
-                    else
-                      DropdownButtonFormField<String>(
-                        value: _selectedContact?.id,
-                        decoration: const InputDecoration(
-                          labelText: 'Contacto do Pedido',
-                          prefixIcon: Icon(Icons.contact_phone_outlined),
-                        ),
-                        items: _contacts.map((c) {
-                          return DropdownMenuItem<String>(
-                            value: c.id,
-                            child: Text(c.display, overflow: TextOverflow.ellipsis),
-                          );
-                        }).toList(),
-                        onChanged: (v) {
-                          final picked = _contacts.where((c) => c.id == v).toList();
-                          setState(() {
-                            _selectedContact = picked.isNotEmpty ? picked.first : null;
-                          });
-                        },
-                        validator: (_) {
-                          if (_selectedCustomer != null && _selectedContact == null) {
-                            return 'Obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-
-                    const SizedBox(height: 14),
-
-                    // Footer
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: _creating ? null : () => Navigator.of(context).pop(),
-                          child: const Text('Cancelar'),
-                        ),
-                        const Spacer(),
-                        ElevatedButton(
-                          onPressed: _creating ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFB7E4C7), // verde pastel
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: _creating
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Criar'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+    if (_loading) {
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _dialogBackground,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _dialogBorder, width: 1),
+            ),
+            padding: const EdgeInsets.all(20),
+            child: const SizedBox(
+              height: 120,
+              child: Center(child: CircularProgressIndicator()),
             ),
           ),
         ),
-      ),
-    );
-  }
-}
+      );
+    }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: 720,
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: _dialogBackground,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: _dialogBorder,
+              width: 1,
+            ),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.add_circle_outline),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Inserir Pedido',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: _saving
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Align(
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Pedido',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Autocomplete<CrmInsertOrderCustomer>(
+                        optionsBuilder: (textEditingValue) {
+                          final query =
+                              textEditingValue.text.trim().toLowerCase();
+                          if (query.isEmpty) {
+                            return _customers;
+                          }
 
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 15,
-        fontWeight: FontWeight.w700,
-        color: Color(0xFF151515),
-      ),
-    );
-  }
-}
-
-class _LoadingField extends StatelessWidget {
-  const _LoadingField({required this.label, required this.icon});
-  final String label;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon),
-      ),
-      child: const SizedBox(
-        height: 24,
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('A carregar...'),
+                          return _customers.where((customer) {
+                            final name = customer.name.toLowerCase();
+                            final vat =
+                                (customer.vatNumber ?? '').toLowerCase();
+                            return name.contains(query) || vat.contains(query);
+                          });
+                        },
+                        displayStringForOption: (option) => option.name,
+                        fieldViewBuilder:
+                            (context, controller, focusNode, onFieldSubmitted) {
+                          _customerController.value = controller.value;
+                          return TextFormField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            decoration: const InputDecoration(
+                              labelText: 'Cliente',
+                              prefixIcon: Icon(Icons.business_outlined),
+                            ),
+                            validator: (_) =>
+                                _selectedCustomer == null ? 'Obrigatorio' : null,
+                          );
+                        },
+                        onSelected: (selection) {
+                          setState(() {
+                            _selectedCustomer = selection;
+                          });
+                          _loadContactsForCustomer(selection.id);
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      if (!widget.useCurrentCommercialOnly) ...[
+                        DropdownButtonFormField<String>(
+                          initialValue: _selectedCommercialUserId,
+                          decoration: const InputDecoration(
+                            labelText: 'Comercial',
+                            prefixIcon: Icon(Icons.person_outline),
+                          ),
+                          items: _commercials
+                              .map(
+                                (item) => DropdownMenuItem<String>(
+                                  value: item.userId,
+                                  child: Text(item.fullName),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedCommercialUserId = value;
+                            });
+                          },
+                          validator: (value) =>
+                              value == null || value.isEmpty ? 'Obrigatorio' : null,
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      TextFormField(
+                        controller: _requestedAtController,
+                        readOnly: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Data do Pedido',
+                          prefixIcon: Icon(Icons.event_outlined),
+                        ),
+                        validator: (_) =>
+                            _requestedAt == null ? 'Obrigatorio' : null,
+                        onTap: _pickRequestedAt,
+                      ),
+                      const SizedBox(height: 10),
+                      TextFormField(
+                        controller: _expectedDeliveryDateController,
+                        readOnly: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Data Prevista de Entrega',
+                          prefixIcon: Icon(Icons.event_available_outlined),
+                        ),
+                        validator: (_) => _expectedDeliveryDate == null
+                            ? 'Obrigatorio'
+                            : null,
+                        onTap: _pickExpectedDeliveryDate,
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedContact?.id,
+                        decoration: const InputDecoration(
+                          labelText: 'Contacto do Pedido',
+                          prefixIcon: Icon(Icons.alternate_email_outlined),
+                        ),
+                        items: _contacts
+                            .map(
+                              (contact) => DropdownMenuItem<String>(
+                                value: contact.id,
+                                child: Text(contact.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _contacts.isEmpty
+                            ? null
+                            : (value) {
+                                setState(() {
+                                  _selectedContact = _contacts
+                                      .cast<CrmInsertOrderContact?>()
+                                      .firstWhere(
+                                        (contact) => contact?.id == value,
+                                        orElse: () => null,
+                                      );
+                                });
+                              },
+                        validator: (_) =>
+                            _selectedContact == null ? 'Obrigatorio' : null,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: _saving
+                          ? null
+                          : () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        foregroundColor: _dangerRed,
+                      ),
+                      child: const Text('Cancelar'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: _saving ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _dangerRed,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: _saving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Criar Pedido'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

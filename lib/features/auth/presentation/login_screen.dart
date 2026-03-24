@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:erp_app/features/app/presentation/landing_screen.dart';
+
+import '../../../core/routing/app_routes.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -136,9 +138,7 @@ class _LeftPanelState extends State<_LeftPanel> {
 
                       if (!context.mounted) return;
 
-                      Navigator.of(context).pushReplacement(
-                        MaterialPageRoute(builder: (_) => const LandingScreen()),
-                      );
+                      context.go(AppRoutes.dashboard);
                     } catch (e) {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -162,7 +162,37 @@ class _LeftPanelState extends State<_LeftPanel> {
                 Row(
                   children: [
                     TextButton(
-                      onPressed: () {},
+                      onPressed: () async {
+                        final email = _email.text.trim();
+
+                        if (email.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Please enter your email first')),
+                          );
+                          return;
+                        }
+
+                        try {
+                          await Supabase.instance.client.auth.resetPasswordForEmail(
+                            email,
+                            redirectTo: 'http://localhost:63083/reset-password',
+                          );
+
+                          if (!context.mounted) return;
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Password reset email sent'),
+                            ),
+                          );
+                        } catch (e) {
+                          if (!context.mounted) return;
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Error sending email: $e')),
+                          );
+                        }
+                      },
                       child: const Text('Forgot password?'),
                     ),
                   ],

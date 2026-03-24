@@ -1,326 +1,373 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-class OrderItem {
-  final String id;
-  final String orderRef;
-  final String? customerName;
-  final String? contactId;
-  final String? contactName;
-  final String? contactEmail;
-  final String? contactPhone;
+import '../../application/crm_dashboard_providers.dart';
+import '../../application/crm_insert_revision_models.dart';
+import '../../application/crm_insert_revision_service.dart';
 
-  const OrderItem({
-    required this.id,
-    required this.orderRef,
-    this.customerName,
-    this.contactId,
-    this.contactName,
-    this.contactEmail,
-    this.contactPhone,
+class InsertRevisionDialog extends ConsumerStatefulWidget {
+  const InsertRevisionDialog({
+    super.key,
+    this.useCurrentCommercialOnly = false,
   });
 
-  factory OrderItem.fromMap(Map<String, dynamic> m) {
-    final customerMap = m['customers'];
-    final contactMap = m['contacts'];
-
-    return OrderItem(
-      id: m['id'] as String,
-      orderRef: (m['order_ref'] ?? '').toString(),
-      customerName: customerMap is Map ? (customerMap['name'] ?? '').toString() : null,
-      contactId: contactMap is Map ? contactMap['id']?.toString() : null,
-      contactName: contactMap is Map ? contactMap['name']?.toString() : null,
-      contactEmail: contactMap is Map ? contactMap['email']?.toString() : null,
-      contactPhone: contactMap is Map ? contactMap['phone']?.toString() : null,
-    );
-  }
-
-  String get display {
-    final customer = (customerName ?? '').trim();
-    if (customer.isEmpty) return orderRef;
-    return '$orderRef — $customer';
-  }
-
-  String get contactDisplay {
-    final parts = <String>[
-      if ((contactName ?? '').trim().isNotEmpty) contactName!.trim(),
-      if ((contactEmail ?? '').trim().isNotEmpty) contactEmail!.trim(),
-      if ((contactPhone ?? '').trim().isNotEmpty) contactPhone!.trim(),
-    ];
-
-    if (parts.isEmpty) return 'Sem contacto associado';
-    return parts.join(' — ');
-  }
-}
-
-class InsertRevisionDialog extends StatefulWidget {
-  const InsertRevisionDialog({super.key});
+  final bool useCurrentCommercialOnly;
 
   @override
-  State<InsertRevisionDialog> createState() => _InsertRevisionDialogState();
+  ConsumerState<InsertRevisionDialog> createState() =>
+      _InsertRevisionDialogState();
 }
 
-class _InsertRevisionDialogState extends State<InsertRevisionDialog> {
+class _InsertRevisionDialogState extends ConsumerState<InsertRevisionDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _orderCtrl = TextEditingController();
+  final _service = const CrmInsertRevisionService();
+  final _orderController = TextEditingController();
+  final _requestedAtController = TextEditingController();
+  final _expectedDeliveryDateController = TextEditingController();
 
-  List<OrderItem> _orders = [];
-  OrderItem? _selectedOrder;
-
-  bool _loadingOrders = true;
-  bool _creating = false;
+  List<CrmInsertRevisionOrder> _orders = [];
+  List<CrmInsertRevisionContact> _contacts = [];
+  CrmInsertRevisionOrder? _selectedOrder;
+  CrmInsertRevisionContact? _selectedContact;
+  DateTime? _requestedAt;
+  DateTime? _expectedDeliveryDate;
+  bool _loading = true;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
+    final now = DateTime.now();
+    _requestedAt = DateTime(now.year, now.month, now.day);
+    _requestedAtController.text = _formatDate(_requestedAt);
+    _expectedDeliveryDate = DateTime(now.year, now.month, now.day);
+    _expectedDeliveryDateController.text = _formatDate(_expectedDeliveryDate);
     _loadOrders();
   }
 
+  @override
+  void dispose() {
+    _orderController.dispose();
+    _requestedAtController.dispose();
+    _expectedDeliveryDateController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadOrders() async {
+    setState(() => _loading = true);
+
     try {
-        final res = await Supabase.instance.client
-          .from('orders')
-          .select('''
-            id,
-            order_ref,
-            customer_id,
-            contact_id,
-            commercial_phase_id,
-            customers(name),
-            contacts(id,name,email,phone)
-          ''')
-          .eq('commercial_phase_id', 13)
-          .order('created_at', ascending: false);
+      final repository = ref.read(crmRepositoryProvider);
+      final rawOrders = await repository.fetchOrdersEligibleForRevision(
+        commercialUserId:
+            widget.useCurrentCommercialOnly ? repository.currentUserId : null,
+      );
+      final orders = _service.filterEligibleOrders(rawOrders);
 
-      final list = (res as List)
-          .map((e) => OrderItem.fromMap(Map<String, dynamic>.from(e)))
-          .toList();
+      if (!mounted) {
+        return;
+      }
 
-      if (!mounted) return;
       setState(() {
-        _orders = list;
-        _loadingOrders = false;
+        _orders = orders;
       });
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingOrders = false);
+      if (!mounted) {
+        return;
+      }
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro a carregar pedidos: $e')),
+        SnackBar(content: Text('Erro ao carregar pedidos: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _loadContacts(String customerId) async {
+    try {
+      final repository = ref.read(crmRepositoryProvider);
+      final contacts = await repository.fetchRevisionContactsForCustomer(
+        customerId,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _contacts = contacts;
+        final orderContactId = _selectedOrder?.contactId;
+        _selectedContact = orderContactId == null
+            ? null
+            : contacts.cast<CrmInsertRevisionContact?>().firstWhere(
+                  (contact) => contact?.id == orderContactId,
+                  orElse: () => null,
+                );
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao carregar contactos: $e')),
       );
     }
   }
 
-    Future<void> _submit() async {
-    if (_selectedOrder == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleciona um pedido.')),
-      );
+  Future<void> _pickRequestedAt() async {
+    final now = DateTime.now();
+    final initialDate = _requestedAt ?? DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 5),
+      helpText: 'Selecionar data do pedido da revisao',
+    );
+
+    if (picked == null || !mounted) {
       return;
     }
 
-    setState(() => _creating = true);
+    setState(() {
+      _requestedAt = DateTime(picked.year, picked.month, picked.day);
+      _requestedAtController.text = _formatDate(_requestedAt);
+    });
+  }
+
+  Future<void> _pickExpectedDeliveryDate() async {
+    final now = DateTime.now();
+    final initialDate =
+        _expectedDeliveryDate ?? DateTime(now.year, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 5),
+      helpText: 'Selecionar data prevista de entrega',
+    );
+
+    if (picked == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _expectedDeliveryDate = DateTime(picked.year, picked.month, picked.day);
+      _expectedDeliveryDateController.text =
+          _formatDate(_expectedDeliveryDate);
+    });
+  }
+
+  String _formatDate(DateTime? value) {
+    if (value == null) {
+      return '';
+    }
+
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final year = value.year.toString();
+    return '$day/$month/$year';
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final validation = _service.validateSelection(
+      order: _selectedOrder,
+      requestedAt: _requestedAt,
+      expectedDeliveryDate: _expectedDeliveryDate,
+    );
+    if (validation != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(validation)));
+      return;
+    }
+
+    setState(() => _saving = true);
 
     try {
-      final res = await Supabase.instance.client.rpc(
-        'create_order_revision_from_crm',
-        params: {
-          'p_order_id': _selectedOrder!.id,
-        },
+      final input = _service.buildInput(
+        order: _selectedOrder!,
+        selectedContact: _selectedContact,
+        requestedAt: _requestedAt!,
+        expectedDeliveryDate: _expectedDeliveryDate,
       );
 
-      if (!mounted) return;
+      final repository = ref.read(crmRepositoryProvider);
+      final revisionId = await repository.createOrderRevisionFromCrm(
+        orderId: input.orderId,
+        contactId: input.contactId,
+        requestedAt: input.requestedAt,
+        expectedDeliveryDate: input.expectedDeliveryDate,
+      );
 
-      Navigator.of(context).pop(res);
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pop(revisionId);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Revisao criada com sucesso')),
+      );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro ao criar revisão: $e')),
+        SnackBar(content: Text('Erro ao criar revisao: $e')),
       );
     } finally {
-      if (mounted) setState(() => _creating = false);
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFFE7E7E7);
-    const border = Color(0xFFC9C9C9);
-    const textDark = Color(0xFF151515);
+    if (_loading) {
+      return const AlertDialog(
+        content: SizedBox(
+          height: 120,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
 
-    return Dialog(
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
-        child: Container(
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: border, width: 1),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.edit_outlined, color: textDark),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Text(
-                            'Inserir Revisão',
-                            style: TextStyle(
-                              color: textDark,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          icon: const Icon(Icons.close),
-                          tooltip: 'Fechar',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
+    return AlertDialog(
+      title: const Text('Inserir Revisao'),
+      content: SizedBox(
+        width: 560,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Autocomplete<CrmInsertRevisionOrder>(
+                  optionsBuilder: (textEditingValue) {
+                    final query = textEditingValue.text.trim().toLowerCase();
+                    if (query.isEmpty) {
+                      return _orders;
+                    }
 
-                    const _RevisionSectionTitle('Revisão'),
-                    const SizedBox(height: 10),
-
-                    _loadingOrders
-                        ? const _RevisionLoadingField(
-                            label: 'Pedido',
-                            icon: Icons.search_outlined,
-                          )
-                        : Autocomplete<OrderItem>(
-                            displayStringForOption: (o) => o.display,
-                            optionsBuilder: (text) {
-                              final q = text.text.trim().toLowerCase();
-                              if (q.isEmpty) return _orders;
-                              return _orders.where((o) {
-                                final ref = o.orderRef.toLowerCase();
-                                final customer = (o.customerName ?? '').toLowerCase();
-                                return ref.contains(q) || customer.contains(q);
-                              });
-                            },
-                            onSelected: (o) {
-                              setState(() => _selectedOrder = o);
-                              _orderCtrl.text = o.display;
-                            },
-                            fieldViewBuilder: (context, textCtrl, focusNode, onFieldSubmitted) {
-                              textCtrl.text = _orderCtrl.text;
-                              textCtrl.selection = TextSelection.fromPosition(
-                                TextPosition(offset: textCtrl.text.length),
-                              );
-
-                              return TextFormField(
-                                controller: textCtrl,
-                                focusNode: focusNode,
-                                decoration: const InputDecoration(
-                                  labelText: 'Pedido',
-                                  prefixIcon: Icon(Icons.search_outlined),
-                                ),
-                                validator: (_) => _selectedOrder == null ? 'Obrigatório' : null,
-                                onChanged: (v) {
-                                  _orderCtrl.text = v;
-                                  setState(() => _selectedOrder = null);
-                                },
-                              );
-                            },
-                          ),
-
-                    const SizedBox(height: 12),
-
-                    InputDecorator(
+                    return _orders.where((order) {
+                      return order.display.toLowerCase().contains(query) ||
+                          order.orderRef.toLowerCase().contains(query) ||
+                          order.customerName.toLowerCase().contains(query);
+                    });
+                  },
+                  displayStringForOption: (option) => option.display,
+                  fieldViewBuilder:
+                      (context, controller, focusNode, onFieldSubmitted) {
+                    _orderController.value = controller.value;
+                    return TextFormField(
+                      controller: controller,
+                      focusNode: focusNode,
                       decoration: const InputDecoration(
-                        labelText: 'Contacto atual do Pedido',
-                        prefixIcon: Icon(Icons.contact_phone_outlined),
+                        labelText: 'Pedido',
+                        prefixIcon: Icon(Icons.receipt_long_outlined),
                       ),
-                      child: Text(
-                        _selectedOrder?.contactDisplay ?? 'Seleciona primeiro um pedido.',
-                      ),
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: _creating ? null : () => Navigator.of(context).pop(),
-                          child: const Text('Cancelar'),
-                        ),
-                        const Spacer(),
-                        ElevatedButton(
-                          onPressed: _creating ? null : _submit,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFB7E4C7),
-                            foregroundColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            elevation: 0,
-                          ),
-                          child: const Text('Continuar'),
-                        ),
-                      ],
-                    ),
-                  ],
+                      validator: (_) =>
+                          _selectedOrder == null ? 'Obrigatorio' : null,
+                    );
+                  },
+                  onSelected: (selection) {
+                    setState(() {
+                      _selectedOrder = selection;
+                      _selectedContact = null;
+                      _contacts = [];
+                    });
+                    _loadContacts(selection.customerId);
+                  },
                 ),
-              ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _requestedAtController,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Data do Pedido',
+                    prefixIcon: Icon(Icons.event_outlined),
+                  ),
+                  validator: (_) => _requestedAt == null ? 'Obrigatorio' : null,
+                  onTap: _pickRequestedAt,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _expectedDeliveryDateController,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Data Prevista de Entrega',
+                    prefixIcon: Icon(Icons.event_available_outlined),
+                  ),
+                  validator: (_) =>
+                      _expectedDeliveryDate == null ? 'Obrigatorio' : null,
+                  onTap: _pickExpectedDeliveryDate,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedContact?.id,
+                  decoration: const InputDecoration(
+                    labelText: 'Contacto do Pedido',
+                    prefixIcon: Icon(Icons.alternate_email_outlined),
+                  ),
+                  items: _contacts
+                      .map(
+                        (contact) => DropdownMenuItem<String>(
+                          value: contact.id,
+                          child: Text(contact.display),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedContact = _contacts
+                          .cast<CrmInsertRevisionContact?>()
+                          .firstWhere(
+                            (contact) => contact?.id == value,
+                            orElse: () => null,
+                          );
+                    });
+                  },
+                ),
+                if (_selectedOrder != null) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Contacto atual: ${_selectedOrder!.currentContactDisplay}',
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _RevisionSectionTitle extends StatelessWidget {
-  const _RevisionSectionTitle(this.text);
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 15,
-        fontWeight: FontWeight.w700,
-        color: Color(0xFF151515),
-      ),
-    );
-  }
-}
-
-class _RevisionLoadingField extends StatelessWidget {
-  const _RevisionLoadingField({
-    required this.label,
-    required this.icon,
-  });
-
-  final String label;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return InputDecorator(
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: Icon(icon),
-      ),
-      child: const SizedBox(
-        height: 24,
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('A carregar...'),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
         ),
-      ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Criar Revisao'),
+        ),
+      ],
     );
   }
 }

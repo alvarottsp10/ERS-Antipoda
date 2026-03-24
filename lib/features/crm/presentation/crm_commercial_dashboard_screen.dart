@@ -1,0 +1,125 @@
+import 'package:erp_app/features/app/application/app_access_providers.dart';
+import 'package:erp_app/features/app/application/app_realtime_service.dart';
+import 'package:erp_app/features/crm/application/crm_commercial_providers.dart';
+import 'package:erp_app/features/crm/application/crm_dashboard_providers.dart';
+import 'package:erp_app/features/crm/presentation/widgets/crm_dashboard_actions_bar.dart';
+import 'package:erp_app/features/crm/presentation/widgets/orders_in_progress_panel.dart';
+import 'package:erp_app/features/crm/presentation/widgets/orders_sent_panel.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class CrmCommercialDashboardScreen extends ConsumerStatefulWidget {
+  const CrmCommercialDashboardScreen({super.key});
+
+  @override
+  ConsumerState<CrmCommercialDashboardScreen> createState() =>
+      _CrmCommercialDashboardScreenState();
+}
+
+class _CrmCommercialDashboardScreenState
+    extends ConsumerState<CrmCommercialDashboardScreen> {
+  final _realtimeService = AppRealtimeService();
+  RealtimeChannel? _channel;
+
+  @override
+  void initState() {
+    super.initState();
+    _channel = _realtimeService.watchTables(
+      channelName: 'crm-commercial-dashboard',
+      tables: const [
+        'orders',
+        'order_versions',
+        'order_budget_assignments',
+        'proposals',
+      ],
+      onChanged: _invalidateCrmProviders,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _invalidateCrmProviders();
+    });
+  }
+
+  @override
+  void dispose() {
+    final channel = _channel;
+    if (channel != null) {
+      _realtimeService.disposeChannel(channel);
+    }
+    super.dispose();
+  }
+
+  void _invalidateCrmProviders() {
+    ref.invalidate(crmOrdersInProgressProvider);
+    ref.invalidate(crmSentProposalsProvider);
+    ref.invalidate(crmOwnOrdersInProgressProvider);
+    ref.invalidate(crmOwnSentProposalsProvider);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accessAsync = ref.watch(appAccessProvider);
+
+    return accessAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, _) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text('Erro a carregar permissões: $error'),
+        ),
+      ),
+      data: (access) {
+        if (!(access.isCommercial || access.canAccessCrmManagement)) {
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text(
+                        'Acesso restrito',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        'Este ecrã é reservado a utilizadores da área comercial.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return const Padding(
+          padding: EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CrmDashboardActionsBar(useCurrentCommercialOnly: true),
+              SizedBox(height: 16),
+              Expanded(
+                child: OrdersInProgressPanel(useCurrentCommercialOnly: true),
+              ),
+              SizedBox(height: 16),
+              Expanded(
+                child: OrdersSentPanel(useCurrentCommercialOnly: true),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}

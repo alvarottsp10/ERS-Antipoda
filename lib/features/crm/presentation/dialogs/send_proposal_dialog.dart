@@ -1,3 +1,5 @@
+import 'package:erp_app/features/crm/application/crm_send_proposal_models.dart';
+import 'package:erp_app/features/crm/application/crm_send_proposal_service.dart';
 import 'package:flutter/material.dart';
 
 class SendProposalDialog extends StatefulWidget {
@@ -16,21 +18,18 @@ class SendProposalDialog extends StatefulWidget {
 
 class _SendProposalDialogState extends State<SendProposalDialog> {
   final _formKey = GlobalKey<FormState>();
-
-  DateTime? _sentAt;
-  DateTime? _feedbackAt;
-  DateTime? _validUntil;
-
+  final _service = const CrmSendProposalService();
   final _noteCtrl = TextEditingController();
+
+  late CrmSendProposalDraft _draft;
 
   @override
   void initState() {
     super.initState();
-
-    final today = DateTime.now();
-    _sentAt = DateTime(today.year, today.month, today.day);
-    _validUntil = _sentAt!.add(const Duration(days: 30));
-    _feedbackAt = null;
+    _draft = _service.createInitialDraft(
+      proposalId: widget.proposalId,
+      orderRef: widget.orderRef,
+    );
   }
 
   Future<void> _pickDate(
@@ -94,7 +93,7 @@ class _SendProposalDialogState extends State<SendProposalDialog> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Enviar Proposta — ${widget.orderRef}',
+                            'Enviar Proposta - ${widget.orderRef}',
                             style: const TextStyle(
                               color: textDark,
                               fontSize: 18,
@@ -110,61 +109,67 @@ class _SendProposalDialogState extends State<SendProposalDialog> {
                       ],
                     ),
                     const SizedBox(height: 10),
-
                     const _SendProposalSectionTitle('Envio'),
                     const SizedBox(height: 10),
-
                     TextFormField(
                       readOnly: true,
-                      controller: TextEditingController(text: _fmtDate(_sentAt)),
+                      controller: TextEditingController(
+                        text: _fmtDate(_draft.sentAt),
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Data de Envio',
                         prefixIcon: Icon(Icons.event_outlined),
                       ),
-                      validator: (_) => _sentAt == null ? 'Obrigatório' : null,
+                      validator: (_) => _service.validateSentAt(_draft.sentAt),
                       onTap: () => _pickDate(
                         context,
-                        _sentAt,
-                        (value) => setState(() => _sentAt = value),
+                        _draft.sentAt,
+                        (value) => setState(() {
+                          _draft = _draft.copyWith(sentAt: value);
+                        }),
                       ),
                     ),
-
                     const SizedBox(height: 12),
-
                     TextFormField(
                       readOnly: true,
-                      controller: TextEditingController(text: _fmtDate(_feedbackAt)),
+                      controller: TextEditingController(
+                        text: _fmtDate(_draft.feedbackAt),
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Data de Feedback',
                         prefixIcon: Icon(Icons.schedule_outlined),
                       ),
-                      validator: (_) => _feedbackAt == null ? 'Obrigatório' : null,
+                      validator: (_) =>
+                          _service.validateFeedbackAt(_draft.feedbackAt),
                       onTap: () => _pickDate(
                         context,
-                        _feedbackAt,
-                        (value) => setState(() => _feedbackAt = value),
+                        _draft.feedbackAt,
+                        (value) => setState(() {
+                          _draft = _draft.copyWith(feedbackAt: value);
+                        }),
                       ),
                     ),
-
                     const SizedBox(height: 12),
-
                     TextFormField(
                       readOnly: true,
-                      controller: TextEditingController(text: _fmtDate(_validUntil)),
+                      controller: TextEditingController(
+                        text: _fmtDate(_draft.validUntil),
+                      ),
                       decoration: const InputDecoration(
                         labelText: 'Validade da Proposta',
                         prefixIcon: Icon(Icons.date_range_outlined),
                       ),
-                      validator: (_) => _validUntil == null ? 'Obrigatório' : null,
+                      validator: (_) =>
+                          _service.validateValidUntil(_draft.validUntil),
                       onTap: () => _pickDate(
                         context,
-                        _validUntil,
-                        (value) => setState(() => _validUntil = value),
+                        _draft.validUntil,
+                        (value) => setState(() {
+                          _draft = _draft.copyWith(validUntil: value);
+                        }),
                       ),
                     ),
-
                     const SizedBox(height: 12),
-
                     TextFormField(
                       controller: _noteCtrl,
                       minLines: 3,
@@ -176,7 +181,6 @@ class _SendProposalDialogState extends State<SendProposalDialog> {
                       ),
                     ),
                     const SizedBox(height: 14),
-
                     Row(
                       children: [
                         TextButton(
@@ -186,14 +190,15 @@ class _SendProposalDialogState extends State<SendProposalDialog> {
                         const Spacer(),
                         ElevatedButton(
                           onPressed: () {
-                            if (!_formKey.currentState!.validate()) return;
-                            Navigator.of(context).pop({
-                              'proposal_id': widget.proposalId,
-                              'sent_at': _sentAt,
-                              'feedback_at': _feedbackAt,
-                              'valid_until': _validUntil,
-                              'note': _noteCtrl.text.trim(),
-                            });
+                            if (!_formKey.currentState!.validate()) {
+                              return;
+                            }
+
+                            final result = _service.buildResult(
+                              _draft.copyWith(note: _noteCtrl.text),
+                            );
+
+                            Navigator.of(context).pop(result);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFB7E4C7),

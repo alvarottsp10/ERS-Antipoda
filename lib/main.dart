@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'features/auth/presentation/login_screen.dart';
+import 'core/routing/app_router.dart';
+import 'core/theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,8 +13,8 @@ Future<void> main() async {
   debugPaintSizeEnabled = false;
 
   await Supabase.initialize(
-    url: const String.fromEnvironment('SUPABASE_URL'),
-    anonKey: const String.fromEnvironment('SUPABASE_ANON_KEY'),
+    url: 'https://cvcjfyvhgxpmdlrfzprf.supabase.co',
+    anonKey: 'sb_publishable_b2Wx-sghyn8Z6CLQJyh0Ow_ous95xDu',
   );
 
   runApp(const ErpApp());
@@ -23,9 +25,12 @@ class ErpApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: LoginScreen(),
+    return ProviderScope(
+      child: MaterialApp.router(
+        routerConfig: appRouter,
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light(),
+      ),
     );
   }
 }

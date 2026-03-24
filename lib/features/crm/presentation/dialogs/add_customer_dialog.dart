@@ -1,13 +1,11 @@
+import 'package:erp_app/features/app/application/app_access_providers.dart';
+import 'package:erp_app/features/crm/application/crm_add_customer_models.dart';
+import 'package:erp_app/features/crm/application/crm_add_customer_service.dart';
+import 'package:erp_app/features/crm/data/crm_repository.dart';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class CountryItem {
-  final int id;
-  final String name;
-  final String? iso2;
-  final String? vatPrefix;   // countries.vat_prefix
-  final String? phonePrefix; // countries.phone_prefix
-
   const CountryItem({
     required this.id,
     required this.name,
@@ -16,23 +14,51 @@ class CountryItem {
     this.phonePrefix,
   });
 
-  factory CountryItem.fromMap(Map<String, dynamic> m) {
+  final int id;
+  final String name;
+  final String? iso2;
+  final String? vatPrefix;
+  final String? phonePrefix;
+
+  factory CountryItem.fromMap(Map<String, dynamic> map) {
     return CountryItem(
-      id: m['id'] as int,
-      name: (m['name'] ?? '') as String,
-      iso2: m['iso2'] as String?,
-      vatPrefix: m['vat_prefix'] as String?,
-      phonePrefix: m['phone_prefix'] as String?,
+      id: (map['id'] as num).toInt(),
+      name: (map['name'] ?? '').toString(),
+      iso2: map['iso2'] as String?,
+      vatPrefix: map['vat_prefix'] as String?,
+      phonePrefix: map['phone_prefix'] as String?,
+    );
+  }
+
+  CrmAddCustomerCountry toModel() {
+    return CrmAddCustomerCountry(
+      id: id,
+      name: name,
+      iso2: iso2,
+      vatPrefix: vatPrefix,
+      phonePrefix: phonePrefix,
     );
   }
 }
 
 class ContactDraft {
+  ContactDraft();
+
   final nameCtrl = TextEditingController();
   final emailCtrl = TextEditingController();
   final phoneCtrl = TextEditingController();
   final roleCtrl = TextEditingController();
   bool isPrimary = false;
+
+  CrmAddCustomerContactDraft toModel() {
+    return CrmAddCustomerContactDraft(
+      name: nameCtrl.text.trim(),
+      email: emailCtrl.text.trim(),
+      phone: phoneCtrl.text.trim(),
+      role: roleCtrl.text.trim(),
+      isPrimary: isPrimary,
+    );
+  }
 
   void dispose() {
     nameCtrl.dispose();
@@ -42,99 +68,187 @@ class ContactDraft {
   }
 }
 
-/// (Opcional) resultado para devolver ao dashboard.
-/// Ainda não é usado para insert — isso fazemos depois.
-class AddCustomerResult {
-  final String name;
-  final int countryId;
-  final String vat;
-  final String? email;
-  final String? phone;
-  final List<ContactDraft> contacts;
+class SiteDraft {
+  SiteDraft({this.country});
 
-  AddCustomerResult({
-    required this.name,
-    required this.countryId,
-    required this.vat,
-    this.email,
-    this.phone,
-    required this.contacts,
-  });
+  final nameCtrl = TextEditingController();
+  final codeCtrl = TextEditingController();
+  final addressLine1Ctrl = TextEditingController();
+  final addressLine2Ctrl = TextEditingController();
+  final postalCodeCtrl = TextEditingController();
+  final cityCtrl = TextEditingController();
+  CountryItem? country;
+
+  CrmAddCustomerSiteDraft toModel() {
+    return CrmAddCustomerSiteDraft(
+      name: nameCtrl.text.trim(),
+      code: codeCtrl.text.trim(),
+      addressLine1: addressLine1Ctrl.text.trim(),
+      addressLine2: addressLine2Ctrl.text.trim(),
+      postalCode: postalCodeCtrl.text.trim(),
+      city: cityCtrl.text.trim(),
+      countryId: country!.id,
+    );
+  }
+
+  void dispose() {
+    nameCtrl.dispose();
+    codeCtrl.dispose();
+    addressLine1Ctrl.dispose();
+    addressLine2Ctrl.dispose();
+    postalCodeCtrl.dispose();
+    cityCtrl.dispose();
+  }
 }
 
-class AddCustomerDialog extends StatefulWidget {
-  const AddCustomerDialog({super.key});
+class AddCustomerResult {
+  const AddCustomerResult({
+    required this.customerId,
+    required this.customerName,
+    required this.vatNumber,
+    required this.contacts,
+    required this.siteCount,
+  });
+
+  final String customerId;
+  final String customerName;
+  final String vatNumber;
+  final List<CrmAddCustomerContactDraft> contacts;
+  final int siteCount;
+}
+
+class AddCustomerDialog extends ConsumerStatefulWidget {
+  const AddCustomerDialog({
+    super.key,
+    this.useCurrentCommercialOnly = false,
+  });
+
+  final bool useCurrentCommercialOnly;
 
   @override
-  State<AddCustomerDialog> createState() => _AddCustomerDialogState();
+  ConsumerState<AddCustomerDialog> createState() => _AddCustomerDialogState();
 }
 
-class _AddCustomerDialogState extends State<AddCustomerDialog> {
+class _AddCustomerDialogState extends ConsumerState<AddCustomerDialog> {
   final _formKey = GlobalKey<FormState>();
+  final _repository = CrmRepository();
+  final _service = const CrmAddCustomerService();
 
-  // Cliente
   final _nameCtrl = TextEditingController();
   final _vatCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
 
-  // Países
-  CountryItem? _selectedCountry;
-  List<CountryItem> _countries = [];
+  CountryItem? _selectedCustomerCountry;
+  List<CountryItem> _countries = const [];
+  List<Map<String, dynamic>> _commercials = const [];
+  String? _selectedCommercialUserId;
   bool _loadingCountries = true;
+  bool _loadingCommercials = true;
+  bool _saving = false;
 
-  // Contactos
   final List<ContactDraft> _contacts = [];
-
-  // Para substituição de prefixos
+  final List<SiteDraft> _sites = [];
   String? _lastPhonePrefixApplied;
 
   Set<String> get _knownVatPrefixes => _countries
-      .map((c) => (c.vatPrefix ?? c.iso2 ?? '').trim().toUpperCase())
-      .where((s) => s.isNotEmpty)
+      .map((country) => (country.vatPrefix ?? country.iso2 ?? '').trim().toUpperCase())
+      .where((prefix) => prefix.isNotEmpty)
       .toSet();
 
   @override
   void initState() {
     super.initState();
     _loadCountries();
+    _loadCommercials();
   }
 
   Future<void> _loadCountries() async {
-    final res = await Supabase.instance.client
-        .from('countries')
-        .select('id,name,iso2,vat_prefix,phone_prefix')
-        .order('name', ascending: true);
+    try {
+      final response = await _repository.fetchCountries();
 
-    final list = (res as List)
-        .map((e) => CountryItem.fromMap(e as Map<String, dynamic>))
-        .toList();
+      final countries = response
+          .map(
+            (item) => CountryItem(
+              id: item.id,
+              name: item.name,
+              iso2: item.iso2,
+              vatPrefix: item.vatPrefix,
+              phonePrefix: item.phonePrefix,
+            ),
+          )
+          .toList(growable: false);
 
-    setState(() {
-      _countries = list;
-      _loadingCountries = false;
-    });
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _countries = countries;
+        _loadingCountries = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() => _loadingCountries = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro a carregar paises: $error')),
+      );
+    }
   }
 
-  // ------------------------------
-  // Prefix logic (VAT + Phones)
-  // ------------------------------
+  Future<void> _loadCommercials() async {
+    try {
+      final response = await _repository.fetchActiveCommercialsList();
+      final currentUserId = _repository.currentUserId;
+      final currentUserExistsInList = response.any(
+        (item) => (item['user_id'] ?? '').toString() == currentUserId,
+      );
+      final fallbackCommercialUserId = response.isEmpty
+          ? null
+          : (response.first['user_id'] ?? '').toString();
 
-  void _applyVatPrefix(CountryItem c) {
-    final newPrefix = (c.vatPrefix ?? c.iso2 ?? '').trim().toUpperCase();
-    if (newPrefix.isEmpty) return;
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _commercials = response;
+        _selectedCommercialUserId = widget.useCurrentCommercialOnly
+            ? currentUserId
+            : (currentUserExistsInList ? currentUserId : fallbackCommercialUserId);
+        _loadingCommercials = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() => _loadingCommercials = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro a carregar comerciais: $error')),
+      );
+    }
+  }
+
+  void _applyVatPrefix(CountryItem country) {
+    final newPrefix = (country.vatPrefix ?? country.iso2 ?? '').trim().toUpperCase();
+    if (newPrefix.isEmpty) {
+      return;
+    }
 
     var text = _vatCtrl.text.trimLeft();
-
-    // Remove múltiplos prefixos antigos (ex: "NL PT 123" -> "123")
     while (true) {
       final parts = text.split(RegExp(r'\s+'));
-      if (parts.isEmpty) break;
+      if (parts.isEmpty) {
+        break;
+      }
+
       final first = parts.first.toUpperCase();
       if (_knownVatPrefixes.contains(first)) {
-        // remove o primeiro token + espaços
-        text = text.replaceFirst(RegExp(r'^[A-Za-z]{2,3}\s+'), '');
-        text = text.trimLeft();
+        text = text.replaceFirst(RegExp(r'^[A-Za-z]{2,3}\s+'), '').trimLeft();
         continue;
       }
       break;
@@ -146,13 +260,13 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
     );
   }
 
-  void _applyPhonePrefixToCustomer(CountryItem c) {
-    final newPrefix = (c.phonePrefix ?? '').trim();
-    if (newPrefix.isEmpty) return;
+  void _applyPhonePrefixToCustomer(CountryItem country) {
+    final newPrefix = (country.phonePrefix ?? '').trim();
+    if (newPrefix.isEmpty) {
+      return;
+    }
 
     final current = _phoneCtrl.text.trim();
-
-    // se está vazio -> preenche
     if (current.isEmpty) {
       _phoneCtrl.text = '$newPrefix ';
       _phoneCtrl.selection = TextSelection.fromPosition(
@@ -162,15 +276,12 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
       return;
     }
 
-    // se já tem o novo prefixo -> não mexe
     if (current.startsWith(newPrefix)) {
       _lastPhonePrefixApplied = newPrefix;
       return;
     }
 
-    // se tinha o prefixo anterior aplicado por nós -> substitui
-    if (_lastPhonePrefixApplied != null &&
-        current.startsWith(_lastPhonePrefixApplied!)) {
+    if (_lastPhonePrefixApplied != null && current.startsWith(_lastPhonePrefixApplied!)) {
       final rest = current.substring(_lastPhonePrefixApplied!.length).trimLeft();
       _phoneCtrl.text = rest.isEmpty ? '$newPrefix ' : '$newPrefix $rest';
       _phoneCtrl.selection = TextSelection.fromPosition(
@@ -180,56 +291,61 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
       return;
     }
 
-    // caso contrário: não força (para não estragar números já formatados)
     _lastPhonePrefixApplied = newPrefix;
   }
 
-  void _applyPhonePrefixToContacts(CountryItem c) {
-    final newPrefix = (c.phonePrefix ?? '').trim();
-    if (newPrefix.isEmpty) return;
+  void _applyPhonePrefixToContacts(CountryItem country) {
+    final newPrefix = (country.phonePrefix ?? '').trim();
+    if (newPrefix.isEmpty) {
+      return;
+    }
 
     for (final contact in _contacts) {
-      final cur = contact.phoneCtrl.text.trim();
-
-      if (cur.isEmpty) {
+      final current = contact.phoneCtrl.text.trim();
+      if (current.isEmpty) {
         contact.phoneCtrl.text = '$newPrefix ';
         continue;
       }
 
-      if (_lastPhonePrefixApplied != null && cur.startsWith(_lastPhonePrefixApplied!)) {
-        final rest = cur.substring(_lastPhonePrefixApplied!.length).trimLeft();
+      if (_lastPhonePrefixApplied != null && current.startsWith(_lastPhonePrefixApplied!)) {
+        final rest = current.substring(_lastPhonePrefixApplied!.length).trimLeft();
         contact.phoneCtrl.text = rest.isEmpty ? '$newPrefix ' : '$newPrefix $rest';
       }
     }
   }
 
-  void _onCountryChanged(CountryItem? v) {
-    setState(() => _selectedCountry = v);
-    if (v == null) return;
+  void _onCustomerCountryChanged(CountryItem? country) {
+    setState(() {
+      _selectedCustomerCountry = country;
+      if (country != null) {
+        for (final site in _sites) {
+          site.country ??= country;
+        }
+      }
+    });
 
-    _applyVatPrefix(v);
-    _applyPhonePrefixToCustomer(v);
-    _applyPhonePrefixToContacts(v);
+    if (country == null) {
+      return;
+    }
+
+    _applyVatPrefix(country);
+    _applyPhonePrefixToCustomer(country);
+    _applyPhonePrefixToContacts(country);
   }
-
-  // ------------------------------
-  // Contacts handling
-  // ------------------------------
 
   void _addContact() {
     setState(() {
-      final c = ContactDraft();
-
-      // 1º contacto = primário por defeito
-      if (_contacts.isEmpty) c.isPrimary = true;
-
-      // preenche prefixo no telemóvel
-      final prefix = (_selectedCountry?.phonePrefix ?? '').trim();
-      if (prefix.isNotEmpty) {
-        c.phoneCtrl.text = '$prefix ';
+      final contact = ContactDraft();
+      if (_contacts.isEmpty) {
+        contact.isPrimary = true;
       }
 
-      _contacts.add(c);
+      final prefix = (_selectedCustomerCountry?.phonePrefix ?? '').trim();
+      if (prefix.isNotEmpty) {
+        contact.phoneCtrl.text = '$prefix ';
+      }
+
+      _contacts.add(contact);
     });
   }
 
@@ -237,9 +353,7 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
     setState(() {
       _contacts[index].dispose();
       _contacts.removeAt(index);
-
-      // garante que existe no máximo 1 primário; se ficou nenhum e há contactos, marca o 1º
-      if (_contacts.isNotEmpty && !_contacts.any((c) => c.isPrimary)) {
+      if (_contacts.isNotEmpty && !_contacts.any((contact) => contact.isPrimary)) {
         _contacts.first.isPrimary = true;
       }
     });
@@ -253,110 +367,139 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
     });
   }
 
-  // ------------------------------
-  // Validation + Submit (ainda sem insert)
-  // ------------------------------
+  void _addSite() {
+    setState(() {
+      _sites.add(SiteDraft(country: _selectedCustomerCountry));
+    });
+  }
 
-  String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Obrigatório' : null;
+  void _removeSite(int index) {
+    setState(() {
+      _sites[index].dispose();
+      _sites.removeAt(index);
+    });
+  }
 
-  String? _optionalEmail(String? v) {
-    final s = (v ?? '').trim();
-    if (s.isEmpty) return null;
-    final ok = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s);
-    return ok ? null : 'Email inválido';
+  String? _required(String? value) =>
+      value == null || value.trim().isEmpty ? 'Obrigatorio' : null;
+
+  String? _optionalEmail(String? value) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) {
+      return null;
+    }
+    final valid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(text);
+    return valid ? null : 'Email invalido';
+  }
+
+  String? _requiredEmail(String? value) {
+    final text = (value ?? '').trim();
+    if (text.isEmpty) {
+      return 'Obrigatorio';
+    }
+    final valid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(text);
+    return valid ? null : 'Email invalido';
   }
 
   Future<void> _submit() async {
-    final country = _selectedCountry;
-    if (country == null) {
+    final contacts = _contacts.map((contact) => contact.toModel()).toList(growable: false);
+    final selectionMessage = _service.validateSelection(
+      customerCountry: _selectedCustomerCountry?.toModel(),
+      commercialUserId: _selectedCommercialUserId,
+      contacts: contacts,
+      siteCount: _sites.length,
+    );
+
+    if (selectionMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seleciona um país.')),
+        SnackBar(content: Text(selectionMessage)),
       );
       return;
     }
 
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
 
-    // validar contactos
-    if (_contacts.isEmpty) {
+    final contactsMessage = _service.validateContacts(contacts);
+    if (contactsMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('É obrigatório pelo menos um contacto.')),
+        SnackBar(content: Text(contactsMessage)),
       );
       return;
     }
 
-    int primaryCount = 0;
-
-    for (var i = 0; i < _contacts.length; i++) {
-      final c = _contacts[i];
-
-      if (c.emailCtrl.text.trim().isEmpty) {
+    final sites = <CrmAddCustomerSiteDraft>[];
+    for (var i = 0; i < _sites.length; i++) {
+      final site = _sites[i];
+      if (site.country == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Contacto ${i + 1}: email é obrigatório.')),
+          SnackBar(content: Text('Local ${i + 1}: seleciona um pais.')),
         );
         return;
       }
-
-      if (c.roleCtrl.text.trim().isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Contacto ${i + 1}: role é obrigatório.')),
-        );
-        return;
-      }
-
-      if (c.isPrimary) primaryCount++;
+      sites.add(site.toModel());
     }
 
-    if (primaryCount != 1) {
+    final sitesMessage = _service.validateSites(sites);
+    if (sitesMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Deve existir exatamente um contacto primário.')),
+        SnackBar(content: Text(sitesMessage)),
       );
       return;
     }
+
+    setState(() => _saving = true);
 
     try {
-      final supabase = Supabase.instance.client;
-
-      final contactsJson = _contacts.map((c) {
-        return {
-          'name': c.nameCtrl.text.trim(),
-          'email': c.emailCtrl.text.trim(),
-          'phone': c.phoneCtrl.text.trim(),
-          'role': c.roleCtrl.text.trim(),
-          'is_primary': c.isPrimary,
-        };
-      }).toList();
-
-      final response = await supabase.rpc(
-        'create_customer_with_contacts',
-        params: {
-          'p_name': _nameCtrl.text.trim(),
-          'p_country_id': country.id,
-          'p_vat_number': _vatCtrl.text.trim(),
-          'p_email': _emailCtrl.text.trim(),
-          'p_phone': _phoneCtrl.text.trim(),
-          'p_contacts': contactsJson,
-        },
+      final input = _service.buildCreateCustomerInput(
+        customerName: _nameCtrl.text,
+        customerCountry: _selectedCustomerCountry!.toModel(),
+        vatNumber: _vatCtrl.text,
+        email: _emailCtrl.text,
+        phone: _phoneCtrl.text,
+        commercialUserId: _selectedCommercialUserId!,
+        contacts: contacts,
+        sites: sites,
       );
 
-      // sucesso
-      if (!mounted) return;
+      final customerId = await _repository.createCustomerWithContacts(input);
 
-      Navigator.of(context).pop(response);
+      if (!mounted) {
+        return;
+      }
 
-    } catch (e) {
-      if (!mounted) return;
+      Navigator.of(context).pop(
+        AddCustomerResult(
+          customerId: customerId,
+          customerName: input.customerName,
+          vatNumber: input.vatNumber,
+          contacts: contacts,
+          siteCount: sites.length,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
+        SnackBar(content: Text(error.toString())),
       );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
   @override
   void dispose() {
-    for (final c in _contacts) {
-      c.dispose();
+    for (final contact in _contacts) {
+      contact.dispose();
+    }
+    for (final site in _sites) {
+      site.dispose();
     }
     _nameCtrl.dispose();
     _vatCtrl.dispose();
@@ -364,10 +507,6 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
     _phoneCtrl.dispose();
     super.dispose();
   }
-
-  // ------------------------------
-  // UI
-  // ------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -378,7 +517,7 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
     return Dialog(
       insetPadding: const EdgeInsets.all(24),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 860),
+        constraints: const BoxConstraints(maxWidth: 940),
         child: Container(
           decoration: BoxDecoration(
             color: bg,
@@ -393,7 +532,6 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Header
                     Row(
                       children: [
                         const Icon(Icons.person_add_alt_1_outlined, color: textDark),
@@ -409,120 +547,94 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
                           ),
                         ),
                         IconButton(
-                          onPressed: () => Navigator.of(context).pop(),
+                          onPressed: _saving ? null : () => Navigator.of(context).pop(),
                           icon: const Icon(Icons.close),
                           tooltip: 'Fechar',
                         ),
                       ],
                     ),
-
                     const SizedBox(height: 10),
-
-                    // Cliente
                     const _SectionTitle('Cliente'),
                     const SizedBox(height: 10),
-
-                    LayoutBuilder(
-                      builder: (context, c) {
-                        final twoCols = c.maxWidth >= 760;
-
-                        Widget gap() => const SizedBox(height: 12);
-
-                        final left = Column(
-                          children: [
-                            TextFormField(
-                              controller: _nameCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'Nome',
-                                prefixIcon: Icon(Icons.business_outlined),
-                              ),
-                              validator: _required,
-                            ),
-                            gap(),
-                            _loadingCountries
-                                ? const _LoadingField(label: 'País', icon: Icons.public)
-                                : DropdownButtonFormField<CountryItem>(
-                                    value: _selectedCountry,
-                                    items: _countries
-                                        .map(
-                                          (c) => DropdownMenuItem(
-                                            value: c,
-                                            child: Text(c.name),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: _onCountryChanged,
-                                    decoration: const InputDecoration(
-                                      labelText: 'País',
-                                      prefixIcon: Icon(Icons.public),
-                                    ),
-                                    validator: (v) => v == null ? 'Obrigatório' : null,
-                                  ),
-                            gap(),
-                            TextFormField(
-                              controller: _vatCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'VAT / NIF',
-                                hintText: 'Ex: PT 123456789',
-                                prefixIcon: Icon(Icons.badge_outlined),
-                              ),
-                              validator: _required,
-                            ),
-                          ],
-                        );
-
-                        final right = Column(
-                          children: [
-                            TextFormField(
-                              controller: _emailCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'Email (opcional)',
-                                prefixIcon: Icon(Icons.email_outlined),
-                              ),
-                              validator: _optionalEmail,
-                            ),
-                            gap(),
-                            TextFormField(
-                              controller: _phoneCtrl,
-                              decoration: const InputDecoration(
-                                labelText: 'Telefone (opcional)',
-                                prefixIcon: Icon(Icons.phone_outlined),
-                              ),
-                            ),
-                          ],
-                        );
-
-                        if (!twoCols) {
-                          return Column(
-                            children: [
-                              left,
-                              const SizedBox(height: 12),
-                              right,
-                            ],
-                          );
-                        }
-
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(child: left),
-                            const SizedBox(width: 16),
-                            Expanded(child: right),
-                          ],
-                        );
-                      },
+                    _CustomerFields(
+                      loadingCountries: _loadingCountries,
+                      loadingCommercials: _loadingCommercials,
+                      commercials: _commercials,
+                      selectedCommercialUserId: _selectedCommercialUserId,
+                      onCommercialChanged: widget.useCurrentCommercialOnly
+                          ? null
+                          : (value) {
+                              setState(() {
+                                _selectedCommercialUserId = value;
+                              });
+                            },
+                      showCommercialField: !widget.useCurrentCommercialOnly,
+                      countries: _countries,
+                      selectedCountry: _selectedCustomerCountry,
+                      onCountryChanged: _onCustomerCountryChanged,
+                      nameCtrl: _nameCtrl,
+                      vatCtrl: _vatCtrl,
+                      emailCtrl: _emailCtrl,
+                      phoneCtrl: _phoneCtrl,
+                      requiredValidator: _required,
+                      optionalEmailValidator: _optionalEmail,
                     ),
-
                     const SizedBox(height: 14),
-
-                    // Contactos header + botão
+                    Row(
+                      children: [
+                        const Expanded(child: _SectionTitle('Locais')),
+                        SizedBox(
+                          height: 40,
+                          child: ElevatedButton.icon(
+                            onPressed: _saving ? null : _addSite,
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Adicionar local'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: textDark,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                side: const BorderSide(color: border, width: 1),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (_sites.isEmpty)
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: 10),
+                          child: Text(
+                            'Sem locais adicionados.',
+                            style: TextStyle(color: Colors.black54),
+                          ),
+                        ),
+                      ),
+                    for (var i = 0; i < _sites.length; i++)
+                      _SiteCard(
+                        index: i,
+                        site: _sites[i],
+                        countries: _countries,
+                        loadingCountries: _loadingCountries,
+                        borderSoft: border,
+                        onRemove: _saving ? null : () => _removeSite(i),
+                        onCountryChanged: (country) {
+                          setState(() => _sites[i].country = country);
+                        },
+                        requiredValidator: _required,
+                      ),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         const Expanded(child: _SectionTitle('Contactos')),
                         SizedBox(
                           height: 40,
                           child: ElevatedButton.icon(
-                            onPressed: _addContact,
+                            onPressed: _saving ? null : _addContact,
                             icon: const Icon(Icons.add, size: 18),
                             label: const Text('Adicionar contacto'),
                             style: ElevatedButton.styleFrom(
@@ -539,7 +651,6 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
                       ],
                     ),
                     const SizedBox(height: 10),
-
                     if (_contacts.isEmpty)
                       const Align(
                         alignment: Alignment.centerLeft,
@@ -551,28 +662,27 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
                           ),
                         ),
                       ),
-
                     for (var i = 0; i < _contacts.length; i++)
                       _ContactCard(
                         index: i,
                         contact: _contacts[i],
                         borderSoft: border,
-                        onRemove: () => _removeContact(i),
-                        onPrimary: () => _setPrimary(i),
+                        onRemove: _saving ? null : () => _removeContact(i),
+                        onPrimary: _saving ? null : () => _setPrimary(i),
+                        requiredValidator: _required,
+                        requiredEmailValidator: _requiredEmail,
                       ),
-
                     const SizedBox(height: 12),
-
-                    // Footer
                     Row(
                       children: [
+                        const Spacer(),
                         TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
+                          onPressed: _saving ? null : () => Navigator.of(context).pop(),
                           child: const Text('Cancelar'),
                         ),
-                        const Spacer(),
+                        const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: _submit,
+                          onPressed: _saving ? null : _submit,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFB00020),
                             foregroundColor: Colors.white,
@@ -580,7 +690,13 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                           ),
-                          child: const Text('Guardar'),
+                          child: _saving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Guardar'),
                         ),
                       ],
                     ),
@@ -595,8 +711,159 @@ class _AddCustomerDialogState extends State<AddCustomerDialog> {
   }
 }
 
+class _CustomerFields extends StatelessWidget {
+  const _CustomerFields({
+    required this.loadingCountries,
+    required this.loadingCommercials,
+    required this.commercials,
+    required this.selectedCommercialUserId,
+    required this.onCommercialChanged,
+    required this.showCommercialField,
+    required this.countries,
+    required this.selectedCountry,
+    required this.onCountryChanged,
+    required this.nameCtrl,
+    required this.vatCtrl,
+    required this.emailCtrl,
+    required this.phoneCtrl,
+    required this.requiredValidator,
+    required this.optionalEmailValidator,
+  });
+
+  final bool loadingCountries;
+  final bool loadingCommercials;
+  final List<Map<String, dynamic>> commercials;
+  final String? selectedCommercialUserId;
+  final ValueChanged<String?>? onCommercialChanged;
+  final bool showCommercialField;
+  final List<CountryItem> countries;
+  final CountryItem? selectedCountry;
+  final ValueChanged<CountryItem?> onCountryChanged;
+  final TextEditingController nameCtrl;
+  final TextEditingController vatCtrl;
+  final TextEditingController emailCtrl;
+  final TextEditingController phoneCtrl;
+  final FormFieldValidator<String> requiredValidator;
+  final FormFieldValidator<String> optionalEmailValidator;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final twoCols = constraints.maxWidth >= 760;
+        final left = Column(
+          children: [
+            if (showCommercialField) ...[
+              loadingCommercials
+                  ? const _LoadingField(
+                      label: 'Comercial',
+                      icon: Icons.person_outline,
+                    )
+                  : DropdownButtonFormField<String>(
+                      value: selectedCommercialUserId,
+                      items: commercials
+                          .map(
+                            (item) => DropdownMenuItem<String>(
+                              value: (item['user_id'] ?? '').toString(),
+                              child: Text((item['full_name'] ?? '').toString()),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: onCommercialChanged,
+                      decoration: const InputDecoration(
+                        labelText: 'Comercial Responsavel',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                      validator: (value) =>
+                          value == null || value.trim().isEmpty
+                              ? 'Obrigatorio'
+                              : null,
+                    ),
+              const SizedBox(height: 12),
+            ],
+            TextFormField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Nome',
+                prefixIcon: Icon(Icons.business_outlined),
+              ),
+              validator: requiredValidator,
+            ),
+            const SizedBox(height: 12),
+            loadingCountries
+                ? const _LoadingField(label: 'Pais', icon: Icons.public)
+                : DropdownButtonFormField<CountryItem>(
+                    value: selectedCountry,
+                    items: countries
+                        .map(
+                          (country) => DropdownMenuItem<CountryItem>(
+                            value: country,
+                            child: Text(country.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: onCountryChanged,
+                    decoration: const InputDecoration(
+                      labelText: 'Pais',
+                      prefixIcon: Icon(Icons.public),
+                    ),
+                    validator: (value) => value == null ? 'Obrigatorio' : null,
+                  ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: vatCtrl,
+              decoration: const InputDecoration(
+                labelText: 'VAT / NIF',
+                hintText: 'Ex: PT 123456789',
+                prefixIcon: Icon(Icons.badge_outlined),
+              ),
+              validator: requiredValidator,
+            ),
+          ],
+        );
+        final right = Column(
+          children: [
+            TextFormField(
+              controller: emailCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Email (opcional)',
+                prefixIcon: Icon(Icons.email_outlined),
+              ),
+              validator: optionalEmailValidator,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: phoneCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Telefone (opcional)',
+                prefixIcon: Icon(Icons.phone_outlined),
+              ),
+            ),
+          ],
+        );
+
+        if (!twoCols) {
+          return Column(
+            children: [left, const SizedBox(height: 12), right],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: left),
+            const SizedBox(width: 16),
+            Expanded(child: right),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class _SectionTitle extends StatelessWidget {
   const _SectionTitle(this.text);
+
   final String text;
 
   @override
@@ -614,6 +881,7 @@ class _SectionTitle extends StatelessWidget {
 
 class _LoadingField extends StatelessWidget {
   const _LoadingField({required this.label, required this.icon});
+
   final String label;
   final IconData icon;
 
@@ -635,6 +903,157 @@ class _LoadingField extends StatelessWidget {
   }
 }
 
+class _SiteCard extends StatelessWidget {
+  const _SiteCard({
+    required this.index,
+    required this.site,
+    required this.countries,
+    required this.loadingCountries,
+    required this.borderSoft,
+    required this.onRemove,
+    required this.onCountryChanged,
+    required this.requiredValidator,
+  });
+
+  final int index;
+  final SiteDraft site;
+  final List<CountryItem> countries;
+  final bool loadingCountries;
+  final Color borderSoft;
+  final VoidCallback? onRemove;
+  final ValueChanged<CountryItem?> onCountryChanged;
+  final FormFieldValidator<String> requiredValidator;
+
+  @override
+  Widget build(BuildContext context) {
+    const textDark = Color(0xFF151515);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.65),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderSoft, width: 1),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Local ${index + 1}',
+                  style: const TextStyle(fontWeight: FontWeight.w700, color: textDark),
+                ),
+              ),
+              IconButton(
+                onPressed: onRemove,
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Remover local',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: site.nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Nome do local',
+                    prefixIcon: Icon(Icons.location_city_outlined),
+                  ),
+                  validator: requiredValidator,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextFormField(
+                  controller: site.codeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Codigo (opcional)',
+                    prefixIcon: Icon(Icons.tag_outlined),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: site.addressLine1Ctrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Morada',
+                    prefixIcon: Icon(Icons.home_work_outlined),
+                  ),
+                  validator: requiredValidator,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextFormField(
+                  controller: site.addressLine2Ctrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Morada 2 (opcional)',
+                    prefixIcon: Icon(Icons.pin_drop_outlined),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: site.postalCodeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Codigo Postal',
+                    prefixIcon: Icon(Icons.markunread_mailbox_outlined),
+                  ),
+                  validator: requiredValidator,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextFormField(
+                  controller: site.cityCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Cidade',
+                    prefixIcon: Icon(Icons.location_on_outlined),
+                  ),
+                  validator: requiredValidator,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          loadingCountries
+              ? const _LoadingField(label: 'Pais do local', icon: Icons.public)
+              : DropdownButtonFormField<CountryItem>(
+                  value: site.country,
+                  items: countries
+                      .map(
+                        (country) => DropdownMenuItem<CountryItem>(
+                          value: country,
+                          child: Text(country.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: onCountryChanged,
+                  decoration: const InputDecoration(
+                    labelText: 'Pais do local',
+                    prefixIcon: Icon(Icons.public),
+                  ),
+                  validator: (value) => value == null ? 'Obrigatorio' : null,
+                ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ContactCard extends StatelessWidget {
   const _ContactCard({
     required this.index,
@@ -642,18 +1061,21 @@ class _ContactCard extends StatelessWidget {
     required this.borderSoft,
     required this.onRemove,
     required this.onPrimary,
+    required this.requiredValidator,
+    required this.requiredEmailValidator,
   });
 
   final int index;
   final ContactDraft contact;
   final Color borderSoft;
-  final VoidCallback onRemove;
-  final VoidCallback onPrimary;
+  final VoidCallback? onRemove;
+  final VoidCallback? onPrimary;
+  final FormFieldValidator<String> requiredValidator;
+  final FormFieldValidator<String> requiredEmailValidator;
 
   @override
   Widget build(BuildContext context) {
     const textDark = Color(0xFF151515);
-
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -669,10 +1091,7 @@ class _ContactCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   'Contacto ${index + 1}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: textDark,
-                  ),
+                  style: const TextStyle(fontWeight: FontWeight.w700, color: textDark),
                 ),
               ),
               IconButton(
@@ -683,7 +1102,6 @@ class _ContactCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-
           Row(
             children: [
               Expanded(
@@ -693,6 +1111,7 @@ class _ContactCard extends StatelessWidget {
                     labelText: 'Nome do contacto',
                     prefixIcon: Icon(Icons.person_outline),
                   ),
+                  validator: requiredValidator,
                 ),
               ),
               const SizedBox(width: 12),
@@ -700,24 +1119,25 @@ class _ContactCard extends StatelessWidget {
                 child: TextFormField(
                   controller: contact.roleCtrl,
                   decoration: const InputDecoration(
-                    labelText: 'Role (obrigatório)',
+                    labelText: 'Role',
                     prefixIcon: Icon(Icons.work_outline),
                   ),
+                  validator: requiredValidator,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-
           Row(
             children: [
               Expanded(
                 child: TextFormField(
                   controller: contact.emailCtrl,
                   decoration: const InputDecoration(
-                    labelText: 'Email (obrigatório)',
+                    labelText: 'Email',
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
+                  validator: requiredEmailValidator,
                 ),
               ),
               const SizedBox(width: 12),
@@ -725,23 +1145,21 @@ class _ContactCard extends StatelessWidget {
                 child: TextFormField(
                   controller: contact.phoneCtrl,
                   decoration: const InputDecoration(
-                    labelText: 'Telemóvel (opcional)',
+                    labelText: 'Telemovel (opcional)',
                     prefixIcon: Icon(Icons.phone_android_outlined),
                   ),
                 ),
               ),
             ],
           ),
-
           const SizedBox(height: 10),
-
           Row(
             children: [
               Checkbox(
                 value: contact.isPrimary,
-                onChanged: (_) => onPrimary(),
+                onChanged: onPrimary == null ? null : (_) => onPrimary!(),
               ),
-              const Text('Contacto primário'),
+              const Text('Contacto primario'),
             ],
           ),
         ],

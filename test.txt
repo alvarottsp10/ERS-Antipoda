@@ -1,0 +1,1 @@
+flutter run -d chrome --web-port=8080 --dart-define=SUPABASE_URL=https://tqbqxhdmowfysnjrqxqo.supabase.co --dart-define=SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxYnF4aGRtb3dmeXNuanJxeHFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NTY0NjUsImV4cCI6MjA4ODAzMjQ2NX0.AmSsjXXandNLS1IJdZDNJTr1B7xwoxbvQaVOcZNprnI
